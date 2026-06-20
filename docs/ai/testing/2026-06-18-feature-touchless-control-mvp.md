@@ -1,0 +1,158 @@
+---
+phase: testing
+title: Touchless Control MVP Testing Strategy
+description: Acceptance and coverage plan for the touchless mouse-control MVP
+---
+
+# Touchless Control MVP Testing Strategy
+
+## Test Coverage Goals
+- Unit tests should cover all new state-machine, primitive-detection, mapping, configuration, and OS-controller abstraction logic.
+- Integration tests should cover perception-to-feature contracts, state-machine-to-action contracts, and backend dispatch adapters with mocks.
+- End-to-end/manual tests should measure latency, FPS, success rate, false positives, recovery, and log completeness.
+- Hardware/manual validation is required for camera and real OS injection behavior.
+
+## Unit Tests
+### Contracts & Fixtures
+- [x] Public package exports the core contracts.
+- [x] Contract classes are dataclasses.
+- [x] `ActionCommand.move_relative()` emits relative movement and remains immutable.
+- [x] Balanced sensitivity preset matches the requirements baseline.
+- [x] Stable pointing and tracking-loss fixtures provide 21 landmarks.
+- [x] Multimodal intent contracts support optional face and attention inputs.
+- [x] Intent signal source features are immutable after construction.
+- [x] Scaled package paths are importable.
+- [x] Legacy package paths still export the public API.
+
+### Config & Calibration
+- [x] Provides `gentle`, `balanced`, and `responsive` sensitivity presets.
+- [x] Looks up named presets deterministically.
+- [x] Derives palm-scale baseline, jitter, pinch thresholds, and click/drag guards from calibration samples.
+- [x] Converts calibration results into a tuned preset without mutating the source preset.
+
+### Perception Adapter
+- [x] MediaPipe hand adapter uses one-hand `LIVE_STREAM` configuration.
+- [x] Adapter submits frames through an async detector boundary.
+- [x] Adapter converts the latest callback result into `HandFrame`.
+- [x] Adapter ignores empty or incomplete landmark results.
+- [x] Real MediaPipe detector factory can create a detector through MediaPipe Solutions or MediaPipe Tasks.
+
+### Camera Smoke
+- [x] OpenCV camera runner reads frames through an injectable capture boundary.
+- [x] Camera runner reports camera-open failures without crashing.
+- [x] `camera-smoke` CLI reports frame and hand-frame counts.
+- [x] Local smoke command opened camera index 0 and read 30 frames with MediaPipe initialized.
+
+### Feature Normalization
+- [x] Computes palm scale consistently from landmark fixtures.
+- [x] Normalizes index, thumb, middle, and palm coordinates.
+- [x] Computes pinch ratio independent of hand distance to camera.
+- [x] Flags tracking loss or low stability when confidence/input quality is insufficient.
+
+### Primitive Detection
+- [x] Detects `pointing`, `pinch_closed`, `pinch_opened`, `open_palm`, `two_finger_swipe`, and `tracking_lost`.
+- [x] Applies close/open hysteresis and does not flicker while pinch remains between close/open thresholds.
+- [x] Rejects ambiguous scroll while pinch/drag intent is active.
+
+### Interaction State Machine
+- [x] Moves `NoHand` to `Pointing` only after stable hand detection.
+- [x] Commits left click only on valid pinch release before drag threshold.
+- [x] Enters `Dragging` after hold threshold or early drag motion.
+- [x] Sends safe release when tracking is lost during drag.
+- [x] Blocks committed actions during `Paused`.
+- [x] Applies `Cooldown` after click/drag completion.
+- [x] Enters dedicated `Scrolling` state and dispatches bounded wheel command on two-finger swipe.
+
+### Cursor Mapping
+- [x] Applies deadzone for small hand motion.
+- [x] Applies EMA/adaptive smoothing.
+- [x] Applies acceleration and clamps `max_step`.
+- [x] Emits relative movement, never absolute cursor targets.
+
+### OS Controller
+- [x] Converts action commands to Windows backend payloads through an injected sender.
+- [x] Creates a real Windows `SendInput` sender when no test sender is injected.
+- [x] Verifies the `SendInput` sender through a fake Windows API boundary.
+- [x] Raises and reports failure when Windows reports a partial or failed send.
+- [x] Converts action commands to Linux/uinput-style payloads through an injected writer.
+- [x] Reports dispatch success, backend name, error code, and latency.
+- [x] Handles backend failures without crashing the interaction loop.
+
+### Action Queue
+- [x] Ignores `none` commands.
+- [x] Coalesces stale relative movement to the latest movement command.
+- [x] Preserves button command order.
+- [x] Enqueues safe `left_up` only when a left button is currently down.
+- [x] Flushes queued commands through a controller boundary.
+
+### Overlay Feedback
+- [x] Reports current interaction state and active mode.
+- [x] Reports stable, no-hand, and tracking-lost status.
+- [x] Raises a latency warning when latency exceeds the 80 ms MVP budget.
+- [x] Carries stability and pinch metrics needed by a renderer/debug view.
+
+### Observability
+- [x] Records timestamp, state, primitive types, transition reasons, action types, dispatch outcomes, latency, and key feature values.
+- [x] Summarizes action count, dispatch count, failure count, tracking-loss count, average latency, and p95 latency.
+
+### Acceptance Automation
+- [x] Evaluates p95 latency against the 80 ms MVP budget from session summaries.
+- [x] Flags dispatch failures from session summaries.
+- [x] Recommends stricter pinch/click thresholds when false clicks exceed budget.
+- [x] Recommends safer drag thresholds when false drags exceed budget.
+
+## Integration Tests
+- [x] `FeatureFrame` fixture -> primitive events -> click action command.
+- [x] `FeatureFrame` fixture sequence -> drag down/move/up commands.
+- [x] Scroll fixture sequence -> rate-limited wheel commands.
+- [x] Tracking-loss sequence -> no accidental click and safe release if needed.
+- [x] Paused sequence -> no click, drag, scroll, or movement dispatch.
+- [x] Logger receives feature, state, action, dispatch, and latency records.
+- [x] `IntentContext` preserves hand-only runtime behavior.
+- [x] Off-screen attention blocks movement dispatch.
+- [x] Off-screen attention safely releases an active drag.
+- [x] Attention recovery after an active drag safe-release does not emit a duplicate `left_up`.
+
+## End-to-End Tests
+- [ ] `TP-MOVE-STRAIGHT`: move hand left/right/up/down 20 times; p95 latency < 80 ms; no movement spike beyond `max_step`.
+- [ ] `TP-MOVE-STATIONARY`: hold pointing for 5 seconds, 10 repetitions; RMS jitter <= 6 px.
+- [ ] `TP-CLICK-INTENT`: 100 short pinches; success >= 95%; p95 latency < 80 ms.
+- [ ] `TP-CLICK-FALSE`: 5 minutes idle/pointing/reposition; false click <= 0.5/min.
+- [ ] `TP-DRAG-INTENT`: 50 drag tasks; success >= 90%.
+- [ ] `TP-DRAG-FALSE`: 100 short clicks; false drag <= 2/100.
+- [ ] `TP-SCROLL-UPDOWN`: 50 up and 50 down swipes; direction correctness >= 95%; p95 latency < 80 ms.
+- [ ] `TP-PAUSE-SAFETY`: random actions with open-palm interruptions; committed actions while paused = 0.
+- [ ] `TP-TRACKING-LOSS`: hide hand for 1 second and return; recovery <= 2 seconds; accidental action = 0.
+- [ ] `TP-LONG-SESSION`: 10-minute mixed session; effective FPS >= 30; false positives <= 1.0/min; logs complete.
+- [ ] `TP-CROSS-OS`: required actions pass on Windows and Linux.
+
+## Test Data
+- Added landmark fixtures for stable pointing and tracking loss.
+- Still needed: camera-derived landmark fixture sequences for jitter, pinch click, pinch drag, two-finger scroll, and open palm.
+- Mock OS backends that capture commands without injecting real input.
+- Fake Windows `SendInput` boundary for automated sender tests without real OS injection.
+- Session logs from manual test runs for metric regression.
+- Automated acceptance checks over synthetic/in-memory session summaries.
+- Runtime pipeline tests over synthetic `FeatureFrame` sequences.
+- Multimodal intent-context tests over synthetic `AttentionFrame` values.
+
+## Test Reporting & Coverage
+- Report p50/p95/p99 latency, FPS, action success rate, false positives per minute, recovery time, tracking-loss rate, and log completeness.
+- Coverage target: 100% of new state-machine and safety policy branches; documented exceptions only for hardware-only paths.
+- Current automated command: `uv run python -m unittest discover`.
+
+## Manual Testing
+- Validate camera selection and startup with a hand visible in frame until `hand_frames > 0`.
+- Validate overlay state transitions.
+- Validate calibration flow with at least two users or repeated sessions.
+- Validate Windows `SendInput` behavior against normal and elevated target windows.
+- Validate Linux virtual device permissions and fallback errors.
+
+## Performance Testing
+- Measure frame capture, perception, normalization, interaction, queue, OS dispatch, overlay, and logging stages separately.
+- Prefer latest-frame processing; reject designs that build unbounded frame queues.
+
+## Bug Tracking
+- Severity 1: stuck mouse-down, action while paused/tracking lost, uncontrolled scroll, crash during OS injection.
+- Severity 2: false click/drag above acceptance threshold, p95 latency above 80 ms, recovery above 2 seconds.
+- Severity 3: overlay mismatch, incomplete log fields, calibration discomfort.
