@@ -112,6 +112,7 @@ description: Acceptance and coverage plan for the touchless mouse-control MVP
 ### Observability
 - [x] Records timestamp, state, primitive types, transition reasons, action types, dispatch outcomes, latency, and key feature values.
 - [x] Summarizes action count, dispatch count, failure count, tracking-loss count, average latency, and p95 latency.
+- [x] `report --log` analyzes JSONL sessions and reports effective FPS, p95/p99 latency, action/dispatch/failure/tracking-loss counts, primitive distribution, and action distribution.
 
 ### Acceptance Automation
 - [x] Evaluates p95 latency against the 80 ms MVP budget from session summaries.
@@ -133,6 +134,7 @@ description: Acceptance and coverage plan for the touchless mouse-control MVP
 - [x] Attention recovery after an active drag safe-release does not emit a duplicate `left_up`.
 - [x] Live runner processes a detected hand frame, emits a pipeline command, and flushes it through the selected controller.
 - [x] Live runner passes observable state and command/dispatch results to the preview renderer.
+- [x] Session report CLI reads live JSONL logs and prints CLI-friendly metric lines.
 
 ## End-to-End Tests
 - [ ] `TP-MOVE-STRAIGHT`: move hand left/right/up/down 20 times; p95 latency < 80 ms; no movement spike beyond `max_step`.
@@ -155,12 +157,14 @@ description: Acceptance and coverage plan for the touchless mouse-control MVP
 - Live dry-run no-op controller for human tests before enabling OS input.
 - OpenCV preview window for observing camera framing, hand landmarks, pinch line/center, hand-tracking state, command emission, FPS/counters, backend, and latency during manual validation.
 - JSONL session logs from `live --log` for manual metric regression.
+- `report --log` output for manual run summaries before formal E2E acceptance sign-off.
 - Automated acceptance checks over synthetic/in-memory session summaries.
 - Runtime pipeline tests over synthetic `FeatureFrame` sequences.
 - Multimodal intent-context tests over synthetic `AttentionFrame` values.
 
 ## Test Reporting & Coverage
 - Report p50/p95/p99 latency, FPS, action success rate, false positives per minute, recovery time, tracking-loss rate, and log completeness.
+- Current report automation covers effective FPS, p95/p99 latency, action/primitive distributions, dispatch failures, and tracking-loss count; success-rate and false-positive classification still need scenario labels from manual protocols.
 - Coverage target: 100% of new state-machine and safety policy branches; documented exceptions only for hardware-only paths.
 - Current automated command: `uv run python -m unittest discover`.
 

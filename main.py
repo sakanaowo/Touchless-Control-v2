@@ -4,6 +4,7 @@ import argparse
 from collections.abc import Callable, Sequence
 
 from touchless_control.camera import CameraSmokeRunner, CameraSnapshotRunner
+from touchless_control.observability import SessionReport, analyze_session_log
 from touchless_control.runtime import LiveRunner
 
 
@@ -13,6 +14,7 @@ def main(
     runner_factory: Callable[..., CameraSmokeRunner] = CameraSmokeRunner,
     snapshot_runner_factory: Callable[..., CameraSnapshotRunner] = CameraSnapshotRunner,
     live_runner_factory: Callable[..., LiveRunner] = LiveRunner,
+    report_factory: Callable[[str], SessionReport] = analyze_session_log,
     print_fn: Callable[[str], None] = print,
 ) -> int:
     parser = argparse.ArgumentParser(prog="touchless-control")
@@ -36,6 +38,8 @@ def main(
     live.add_argument("--preview", action="store_true")
     live.add_argument("--verbose-mediapipe", action="store_true")
     live.add_argument("--log", dest="log_path", default=None)
+    report = subparsers.add_parser("report")
+    report.add_argument("--log", required=True)
 
     args = parser.parse_args(argv)
     if args.command == "camera-smoke":
@@ -96,6 +100,12 @@ def main(
             f"error_code={result.error_code}"
         )
         return 0 if result.success else 1
+
+    if args.command == "report":
+        report_result = report_factory(args.log)
+        for line in report_result.to_lines():
+            print_fn(line)
+        return 0
 
     return 1
 

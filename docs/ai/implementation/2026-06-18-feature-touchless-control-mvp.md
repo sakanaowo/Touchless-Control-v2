@@ -14,6 +14,7 @@ description: Implementation notes, changed files, and code guidelines for the to
 - Camera snapshot command: `uv run python main.py camera-snapshot --camera-index 0 --output C:\tmp\touchless-frame.jpg`.
 - Live observable dry-run command: `uv run python main.py live --dry-run --preview --frames 300 --camera-index 0 --model C:\tmp\hand_landmarker.task --log C:\tmp\touchless-session.jsonl`.
 - Live OS-dispatch command: `uv run python main.py live --frames 300 --camera-index 0 --model C:\tmp\hand_landmarker.task`.
+- Session report command: `uv run python main.py report --log C:\tmp\touchless-session.jsonl`.
 - Add `--verbose-mediapipe` only when debugging native MediaPipe logs; live mode suppresses native stderr noise by default.
 - Verification command for the current implementation slice: `uv run python -m unittest discover`.
 - AI docs validation command: `npx ai-devkit@latest lint --feature touchless-control-mvp`.
@@ -41,6 +42,7 @@ Current package layout:
 - `touchless_control/presentation/overlay.py`: overlay snapshot presenter for state, tracking status, active mode, and latency warning data.
 - `touchless_control/presentation/preview.py`: OpenCV preview renderer that displays camera frames with hand landmarks, pinch line/center, action badge, live counters/FPS, runtime state, tracking, command, backend, and latency data for human validation.
 - `touchless_control/observability/logger.py`: structured session log entries and summary metrics.
+- `touchless_control/observability/report.py`: JSONL session log analyzer for latency percentiles, effective FPS, command/primitive distributions, dispatch failures, and tracking-loss count.
 - `touchless_control/observability/acceptance.py`: automated acceptance summary checks and threshold tuning helpers.
 - Compatibility wrappers remain at `touchless_control.contracts`, `config`, `camera`, `perception`, `features`, `interaction`, `control`, `runtime`, `presentation`, `observability`, and `acceptance`.
 - `tests/test_contracts.py`: contract import, immutability, and baseline config tests.
@@ -61,6 +63,7 @@ Current package layout:
 - `tests/test_overlay.py`: overlay snapshot state, mode, tracking-status, and latency-warning tests.
 - `tests/test_preview.py`: OpenCV preview renderer text/landmark drawing tests using a fake `cv2` module.
 - `tests/test_observability.py`: session log record and summary metric tests.
+- `tests/test_report.py`: JSONL session report analyzer and CLI-friendly output tests.
 - `tests/test_runtime_pipeline.py`: runtime movement dispatch and paused-state gating tests.
 - `tests/test_package_layout.py`: scaled package-path import tests and legacy import compatibility tests.
 - `tests/fixtures/landmarks.py`: reusable hand landmark fixtures.
@@ -150,6 +153,8 @@ Planned package boundaries remain:
 - Live JSONL records now include latest primitive types and interaction transition reasons from the runtime pipeline.
 - Live preview passes the current `HandFrame` to the renderer so MediaPipe landmarks are drawn over the camera frame.
 - Live preview now displays live FPS/counters, highlights emitted commands with an action badge, and draws the thumb-index pinch line plus pinch center for threshold debugging.
+- Added `report --log <path>` CLI to summarize session JSONL files after real/manual runs.
+- Session reports include total records, duration, effective FPS, action/dispatch/failure/tracking-loss counts, p95/p99 latency, primitive distribution, and action distribution.
 - Live mode suppresses noisy native MediaPipe stderr logs by default and exposes `--verbose-mediapipe` for debugging.
 - Live runs flush queued commands every processed hand frame so cursor actions do not accumulate behind camera processing.
 - Live mode waits briefly for async MediaPipe callbacks after frame submission before deciding that no hand frame is available.
@@ -265,3 +270,5 @@ Planned package boundaries remain:
 - Live observability green step: `uv run python -m unittest tests.test_live_runner tests.test_preview` passed with 7 tests after retaining pipeline primitive/interaction events, logging them from `LiveRunner`, passing `HandFrame` to preview, and drawing landmarks.
 - Preview diagnostics red step: `uv run python -m unittest tests.test_preview tests.test_live_runner` failed because `PreviewStats` did not exist and `LiveRunner` did not pass stats to preview.
 - Preview diagnostics green step: `uv run python -m unittest tests.test_preview tests.test_live_runner` passed with 8 tests after adding `PreviewStats`, live FPS/counters, action badge, and pinch line/center rendering.
+- Session report red step: `uv run python -m unittest tests.test_report tests.test_main_cli` failed because `SessionReport`, `analyze_session_log`, and `main.py report` were missing.
+- Session report green step: `uv run python -m unittest tests.test_report tests.test_main_cli` passed with 8 tests after adding JSONL report analysis and report CLI output.

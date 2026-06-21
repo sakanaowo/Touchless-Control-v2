@@ -1,6 +1,7 @@
 import unittest
 
 from touchless_control.camera import CameraSmokeResult, CameraSnapshotResult
+from touchless_control.observability import SessionReport
 from touchless_control.runtime.live import LiveRunResult
 
 
@@ -159,6 +160,37 @@ class MainCliTests(unittest.TestCase):
         )
 
         self.assertFalse(captured_kwargs["suppress_native_logs"])
+
+    def test_report_command_reads_session_log_and_prints_summary(self) -> None:
+        from main import main
+
+        output = []
+        captured_paths = []
+        report = SessionReport(
+            total_records=2,
+            duration_s=1.0,
+            effective_fps=2.0,
+            action_count=1,
+            dispatch_count=1,
+            failure_count=0,
+            tracking_loss_count=0,
+            p95_latency_ms=12.0,
+            p99_latency_ms=12.0,
+            primitive_counts={"pointing": 2},
+            action_counts={"move_relative": 1},
+        )
+
+        exit_code = main(
+            ["report", "--log", "C:/tmp/touchless-session.jsonl"],
+            report_factory=lambda path: captured_paths.append(path) or report,
+            print_fn=output.append,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(captured_paths, ["C:/tmp/touchless-session.jsonl"])
+        self.assertIn("session_report total_records=2", output[0])
+        self.assertIn("primitives pointing=2", output[1])
+        self.assertIn("actions move_relative=1", output[2])
 
 
 if __name__ == "__main__":
