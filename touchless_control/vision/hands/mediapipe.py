@@ -89,16 +89,17 @@ def create_mediapipe_detector_factory(
     module_loader: ModuleLoader = importlib.import_module,
 ) -> DetectorFactory:
     mediapipe = module_loader("mediapipe")
-    if not hasattr(mediapipe, "solutions"):
-        if model_asset_path is None:
-            raise RuntimeError(
-                "MediaPipe Tasks requires a hand landmarker model path. "
-                "Pass --model or set TOUCHLESS_HAND_LANDMARKER_MODEL."
-            )
+    if model_asset_path is not None:
         return _create_mediapipe_tasks_factory(
             mediapipe=mediapipe,
             model_asset_path=model_asset_path,
             module_loader=module_loader,
+        )
+
+    if not hasattr(mediapipe, "solutions"):
+        raise RuntimeError(
+            "MediaPipe Tasks requires a hand landmarker model path. "
+            "Pass --model or set TOUCHLESS_HAND_LANDMARKER_MODEL."
         )
 
     def factory(*, config: MediaPipeHandConfig, result_callback: Callable[..., None]) -> _AsyncDetector:
