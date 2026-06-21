@@ -20,6 +20,33 @@ class _Capture:
         self.released = True
 
 
+class _ConfigurableCapture(_Capture):
+    def __init__(self, frames):
+        super().__init__(frames)
+        self.properties = []
+
+    def set(self, property_id, value):
+        self.properties.append((property_id, value))
+        return True
+
+
+class _FlakyCapture:
+    def __init__(self, reads):
+        self.reads = list(reads)
+        self.released = False
+
+    def isOpened(self):
+        return True
+
+    def read(self):
+        if not self.reads:
+            return False, None
+        return self.reads.pop(0)
+
+    def release(self):
+        self.released = True
+
+
 class _Perception:
     def __init__(self, hand_frames):
         self.hand_frames = list(hand_frames)
@@ -32,6 +59,18 @@ class _Perception:
         if not self.hand_frames:
             return None
         return self.hand_frames.pop(0)
+
+
+class _StickyPerception:
+    def __init__(self, hand_frame):
+        self.hand_frame = hand_frame
+        self.submitted = []
+
+    def submit(self, frame, timestamp_ms):
+        self.submitted.append((frame, timestamp_ms))
+
+    def poll_latest(self):
+        return self.hand_frame
 
 
 class _Normalizer:
@@ -350,6 +389,116 @@ class LiveRunnerTests(unittest.TestCase):
 
         self.assertEqual(result.frames_read, 1)
         self.assertEqual(result.preview_frames, 1)
+
+    def test_live_runner_tolerates_transient_camera_read_failures(self):
+        from tests.test_primitives import _feature
+        from touchless_control.runtime.live import LiveRunner
+
+        capture = _FlakyCapture(reads=[(False, None), (True, "frame")])
+        perception = _Perception(hand_frames=["hand"])
+        command = ActionCommand.left_click(timestamp_ms=10, source_state="ClickCommitted")
+
+        runner = LiveRunner(
+            dry_run=True,
+            capture_factory=lambda _index: capture,
+            perception_factory=lambda _width, _height: perception,
+            frame_converter=lambda frame: frame,
+            timestamp_ms=lambda: 10,
+            normalizer=_Normalizer(_feature(timestamp_ms=10)),
+            pipeline=_Pipeline(command),
+            max_read_failures=2,
+        )
+
+        result = runner.run(max_frames=1)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.frames_read, 1)
+        self.assertEqual(result.read_failures, 1)
+        self.assertEqual(result.error_code, None)
+
+    def test_live_runner_default_pipeline_uses_responsive_inverted_cursor(self):
+        from tests.test_primitives import _feature
+        from touchless_control.runtime.live import LiveRunner
+
+        capture = _Capture(frames=["frame"])
+        perception = _Perception(hand_frames=["hand"])
+        controller = _Controller()
+
+        runner = LiveRunner(
+            camera_index=0,
+            dry_run=False,
+            preset_name="responsive",
+            invert_x=True,
+            cursor_gain_scale=1.25,
+            capture_factory=lambda _index: capture,
+            perception_factory=lambda _width, _height: perception,
+            frame_converter=lambda frame: frame,
+            timestamp_ms=lambda: 10,
+            normalizer=_Normalizer(
+                _feature(timestamp_ms=10, hand_velocity_norm=(0.012, 0.0))
+            ),
+            controller_factory=lambda: controller,
+        )
+
+        result = runner.run(max_frames=1)
+
+        self.assertEqual(result.commands_emitted, 1)
+        self.assertEqual(controller.commands[0].type, "move_relative")
+        self.assertLess(controller.commands[0].dx_px, 0)
+
+    def test_live_runner_configures_camera_for_low_latency_capture(self):
+        from touchless_control.runtime.live import LiveRunner
+
+        capture = _ConfigurableCapture(frames=[])
+
+        runner = LiveRunner(
+            dry_run=True,
+            capture_factory=lambda _index: capture,
+            perception_factory=lambda _width, _height: _Perception([]),
+            image_width=640,
+            image_height=480,
+            camera_fps=60,
+            camera_buffer_size=1,
+            max_read_failures=1,
+        )
+
+        runner.run(max_frames=1)
+
+        self.assertEqual(
+            capture.properties[:4],
+            [(3, 640), (4, 480), (5, 60), (38, 1)],
+        )
+
+    def test_live_runner_skips_stale_hand_frames(self):
+        from tests.test_primitives import _feature
+        from touchless_control.runtime.live import LiveRunner
+
+        capture = _Capture(frames=["frame-1", "frame-2"])
+        feature = _feature(timestamp_ms=10, hand_velocity_norm=(0.02, 0.0))
+        command = ActionCommand.move_relative(
+            timestamp_ms=10,
+            dx_px=4,
+            dy_px=0,
+            source_state="Pointing",
+        )
+        pipeline = _Pipeline(command)
+
+        runner = LiveRunner(
+            dry_run=True,
+            capture_factory=lambda _index: capture,
+            perception_factory=lambda _width, _height: _StickyPerception("same-hand"),
+            frame_converter=lambda frame: frame,
+            timestamp_ms=lambda: 20,
+            normalizer=_Normalizer(feature),
+            pipeline=pipeline,
+        )
+
+        result = runner.run(max_frames=2)
+
+        self.assertEqual(result.frames_read, 2)
+        self.assertEqual(result.hand_frames, 1)
+        self.assertEqual(result.commands_emitted, 1)
+        self.assertEqual(pipeline.features, [feature])
 
 
 if __name__ == "__main__":

@@ -51,7 +51,9 @@ class MediaPipeHandPerception:
 
     def poll_latest(self) -> HandFrame | None:
         with self._lock:
-            return self._latest
+            latest = self._latest
+            self._latest = None
+            return latest
 
     def _handle_result(self, result: Any, _output_image: Any, timestamp_ms: int) -> None:
         hand_landmarks = getattr(result, "hand_landmarks", None) or []

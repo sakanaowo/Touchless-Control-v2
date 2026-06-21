@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Sequence
 
 from touchless_control.core.contracts import ActionCommand, HandFrame, OSDispatchResult
@@ -17,10 +17,14 @@ class PreviewStats:
     fps: float
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class OpenCVPreviewRenderer:
     window_name: str = "Touchless Control Preview"
     wait_key_ms: int = 1
+    preview_width: int | None = None
+    preview_height: int | None = None
+    resizable: bool = True
+    _window_ready: bool = field(default=False, init=False, repr=False)
 
     def render(
         self,
@@ -39,6 +43,7 @@ class OpenCVPreviewRenderer:
         except ImportError as error:
             raise RuntimeError("OpenCV is required for live preview") from error
 
+        self._ensure_window(cv2)
         display = frame.copy() if hasattr(frame, "copy") else frame
         lines = _preview_lines(
             snapshot=snapshot,
@@ -86,6 +91,25 @@ class OpenCVPreviewRenderer:
         except ImportError:
             return
         cv2.destroyWindow(self.window_name)
+        self._window_ready = False
+
+    def _ensure_window(self, cv2: object) -> None:
+        if self._window_ready:
+            return
+        if self.resizable and hasattr(cv2, "namedWindow"):
+            flags = getattr(cv2, "WINDOW_NORMAL", 0) | getattr(cv2, "WINDOW_KEEPRATIO", 0)
+            cv2.namedWindow(self.window_name, flags)
+            if (
+                self.preview_width is not None
+                and self.preview_height is not None
+                and hasattr(cv2, "resizeWindow")
+            ):
+                cv2.resizeWindow(
+                    self.window_name,
+                    self.preview_width,
+                    self.preview_height,
+                )
+        self._window_ready = True
 
 
 def _preview_lines(
@@ -126,10 +150,11 @@ def _preview_lines(
 
 
 def _draw_hand_landmarks(cv2: object, display: object, hand_frame: HandFrame) -> None:
+    display_width, display_height = _display_dimensions(display, hand_frame)
     points = [
         (
-            int(x * hand_frame.image_width),
-            int(y * hand_frame.image_height),
+            int(x * display_width),
+            int(y * display_height),
         )
         for x, y, _z in hand_frame.landmarks_img
     ]
@@ -147,6 +172,13 @@ def _draw_hand_landmarks(cv2: object, display: object, hand_frame: HandFrame) ->
         cv2.circle(display, pinch_center, 6, (255, 0, 255), -1, cv2.LINE_AA)
     for point in points:
         cv2.circle(display, point, 4, (40, 240, 120), -1, cv2.LINE_AA)
+
+
+def _display_dimensions(display: object, hand_frame: HandFrame) -> tuple[int, int]:
+    shape = getattr(display, "shape", None)
+    if shape is not None and len(shape) >= 2:
+        return int(shape[1]), int(shape[0])
+    return hand_frame.image_width, hand_frame.image_height
 
 
 def _stats_line(stats: PreviewStats | None) -> str | None:

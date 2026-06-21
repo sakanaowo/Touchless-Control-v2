@@ -9,7 +9,10 @@ from typing import Any, Callable, Protocol, Sequence
 
 from touchless_control.control.os.base import MouseController
 from touchless_control.control.os.factory import create_mouse_controller
+from touchless_control.control.cursor import CursorMapper
+from touchless_control.core.config import SensitivityPreset
 from touchless_control.core.contracts import ActionCommand, OSDispatchResult
+from touchless_control.interaction import InteractionStateMachine, PrimitiveDetector
 from touchless_control.observability import SessionLogger
 from touchless_control.presentation import (
     OpenCVPreviewRenderer,
@@ -71,6 +74,7 @@ class LiveRunResult:
     commands_emitted: int
     dispatches: int
     failures: int
+    read_failures: int = 0
     backend: str = ""
     log_records: int = 0
     preview_frames: int = 0
@@ -88,6 +92,15 @@ class LiveRunner:
     model_asset_path: str | None = None
     dry_run: bool = False
     preview: bool = False
+    preview_width: int = 960
+    preview_height: int = 720
+    camera_fps: int = 60
+    camera_buffer_size: int = 1
+    preset_name: str = "responsive"
+    invert_x: bool = True
+    invert_y: bool = False
+    cursor_gain_scale: float = 1.25
+    max_read_failures: int = 10
     suppress_native_logs: bool = True
     capture_factory: CaptureFactory = _default_capture_factory
     perception_factory: PerceptionFactory | None = None
@@ -97,7 +110,7 @@ class LiveRunner:
     poll_interval_ms: int = 2
     sleep_ms: SleepFn = _sleep_ms
     normalizer: FeatureNormalizer = field(default_factory=FeatureNormalizer)
-    pipeline: TouchlessPipeline = field(default_factory=TouchlessPipeline)
+    pipeline: TouchlessPipeline | None = None
     controller_factory: ControllerFactory = create_mouse_controller
     logger: SessionLogger = field(default_factory=SessionLogger)
     log_path: str | None = None
@@ -115,12 +128,16 @@ class LiveRunner:
                 commands_emitted=0,
                 dispatches=0,
                 failures=0,
+                read_failures=0,
                 backend="dry_run" if self.dry_run else "",
                 log_path=self.log_path,
                 error_code="camera_open_failed",
             )
+        self._configure_capture(capture)
 
         frames_read = 0
+        read_failures = 0
+        consecutive_read_failures = 0
         hand_frames = 0
         commands_emitted = 0
         dispatches = 0
@@ -131,6 +148,14 @@ class LiveRunner:
         stop_requested = False
         frame_limit = None if max_frames <= 0 else max_frames
         started_at_ms: int | None = None
+        terminal_error_code: str | None = None
+        last_hand_timestamp_ms: int | None = None
+        pipeline = self.pipeline or _create_pipeline(
+            preset_name=self.preset_name,
+            invert_x=self.invert_x,
+            invert_y=self.invert_y,
+            gain_scale=self.cursor_gain_scale,
+        )
         try:
             perception_factory = self.perception_factory or self._create_default_perception
             with _native_log_sink(self.suppress_native_logs):
@@ -138,12 +163,23 @@ class LiveRunner:
                 while (frame_limit is None or frames_read < frame_limit) and not stop_requested:
                     ok, frame = capture.read()
                     if not ok:
-                        break
+                        read_failures += 1
+                        consecutive_read_failures += 1
+                        if consecutive_read_failures >= max(1, self.max_read_failures):
+                            terminal_error_code = (
+                                "camera_read_failed"
+                                if frames_read == 0
+                                else "camera_read_interrupted"
+                            )
+                            break
+                        self.sleep_ms(self.poll_interval_ms)
+                        continue
 
                     timestamp_ms = self.timestamp_ms()
                     if started_at_ms is None:
                         started_at_ms = timestamp_ms
                     frames_read += 1
+                    consecutive_read_failures = 0
                     perception.submit(self.frame_converter(frame), timestamp_ms)
                     hand_frame = self._poll_latest_hand(perception)
                     if hand_frame is None:
@@ -166,24 +202,54 @@ class LiveRunner:
                                     started_at_ms=started_at_ms,
                                     now_ms=timestamp_ms,
                                 ),
+                        )
+                        continue
+
+                    feature_frame = self.normalizer.to_features(hand_frame)
+                    hand_timestamp_ms = int(
+                        getattr(hand_frame, "timestamp_ms", feature_frame.timestamp_ms)
+                    )
+                    if (
+                        last_hand_timestamp_ms is not None
+                        and hand_timestamp_ms <= last_hand_timestamp_ms
+                    ):
+                        if preview_renderer is not None:
+                            preview_frames += 1
+                            stop_requested = preview_renderer.render(
+                                frame,
+                                None,
+                                commands=(),
+                                results=(),
+                                backend=controller.backend_name,
+                                dry_run=self.dry_run,
+                                hand_frame=None,
+                                stats=_preview_stats(
+                                    frames_read=frames_read,
+                                    hand_frames=hand_frames,
+                                    commands_emitted=commands_emitted,
+                                    dispatches=dispatches,
+                                    failures=failures,
+                                    started_at_ms=started_at_ms,
+                                    now_ms=timestamp_ms,
+                                ),
                             )
                         continue
 
+                    last_hand_timestamp_ms = hand_timestamp_ms
                     hand_frames += 1
-                    feature_frame = self.normalizer.to_features(hand_frame)
-                    commands = self.pipeline.step(feature_frame)
+                    commands = pipeline.step(feature_frame)
                     commands_emitted += len(commands)
-                    results = self.pipeline.flush(controller)
+                    results = pipeline.flush(controller)
                     dispatches += len(results)
                     failures += sum(1 for result in results if not result.success)
                     latency_ms = float(max(0, self.timestamp_ms() - feature_frame.timestamp_ms))
                     self.logger.record(
                         feature_frame=feature_frame,
                         primitive_events=tuple(
-                            getattr(self.pipeline, "last_primitive_events", ())
+                            getattr(pipeline, "last_primitive_events", ())
                         ),
                         interaction_events=tuple(
-                            getattr(self.pipeline, "last_interaction_events", ())
+                            getattr(pipeline, "last_interaction_events", ())
                         ),
                         commands=commands,
                         results=results,
@@ -192,7 +258,7 @@ class LiveRunner:
                     if preview_renderer is not None:
                         snapshot = self.overlay.snapshot(
                             feature_frame=feature_frame,
-                            state=_pipeline_state(self.pipeline, commands),
+                            state=_pipeline_state(pipeline, commands),
                             latency_ms=latency_ms,
                         )
                         preview_frames += 1
@@ -226,19 +292,20 @@ class LiveRunner:
             self.log_writer(self.log_path, _entries_to_jsonl(self.logger))
 
         return LiveRunResult(
-            success=frames_read > 0 and failures == 0,
+            success=frames_read > 0 and failures == 0 and terminal_error_code is None,
             frames_read=frames_read,
             hand_frames=hand_frames,
             commands_emitted=commands_emitted,
             dispatches=dispatches,
             failures=failures,
+            read_failures=read_failures,
             backend=controller.backend_name,
             log_records=summary.total_records,
             preview_frames=preview_frames,
             average_latency_ms=summary.average_latency_ms,
             p95_latency_ms=summary.p95_latency_ms,
             log_path=self.log_path,
-            error_code=None if frames_read > 0 else "camera_read_failed",
+            error_code=terminal_error_code,
         )
 
     def _create_default_perception(
@@ -263,7 +330,22 @@ class LiveRunner:
     def _create_preview_renderer(self) -> PreviewRenderer | None:
         if not self.preview:
             return None
-        return self.preview_renderer or OpenCVPreviewRenderer()
+        return self.preview_renderer or OpenCVPreviewRenderer(
+            preview_width=self.preview_width,
+            preview_height=self.preview_height,
+        )
+
+    def _configure_capture(self, capture: object) -> None:
+        setter = getattr(capture, "set", None)
+        if setter is None:
+            return
+        for property_id, value in (
+            (_opencv_property("CAP_PROP_FRAME_WIDTH", 3), self.image_width),
+            (_opencv_property("CAP_PROP_FRAME_HEIGHT", 4), self.image_height),
+            (_opencv_property("CAP_PROP_FPS", 5), self.camera_fps),
+            (_opencv_property("CAP_PROP_BUFFERSIZE", 38), self.camera_buffer_size),
+        ):
+            setter(property_id, value)
 
     def _poll_latest_hand(self, perception: Any) -> object | None:
         elapsed_ms = 0
@@ -312,6 +394,34 @@ def _entries_to_jsonl(logger: SessionLogger) -> str:
     if not lines:
         return ""
     return "\n".join(lines) + "\n"
+
+
+def _create_pipeline(
+    *,
+    preset_name: str,
+    invert_x: bool,
+    invert_y: bool,
+    gain_scale: float,
+) -> TouchlessPipeline:
+    preset = SensitivityPreset.named(preset_name)
+    return TouchlessPipeline(
+        detector=PrimitiveDetector(preset=preset),
+        machine=InteractionStateMachine(preset=preset),
+        mapper=CursorMapper(
+            preset=preset,
+            invert_x=invert_x,
+            invert_y=invert_y,
+            gain_scale=gain_scale,
+        ),
+    )
+
+
+def _opencv_property(name: str, fallback: int) -> int:
+    try:
+        import cv2
+    except ImportError:
+        return fallback
+    return int(getattr(cv2, name, fallback))
 
 
 def _pipeline_state(pipeline: object, commands: Sequence[ActionCommand]) -> str:

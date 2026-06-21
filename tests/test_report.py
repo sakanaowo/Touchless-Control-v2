@@ -48,6 +48,60 @@ class SessionReportTests(unittest.TestCase):
         self.assertEqual(report.primitive_counts["pinch_closed"], 1)
         self.assertEqual(report.action_counts["move_relative"], 1)
         self.assertEqual(report.action_counts["left_click"], 1)
+        self.assertEqual(report.move_count, 1)
+        self.assertEqual(report.cursor_update_hz, 1.0)
+        self.assertEqual(report.movement_coverage, 0.5)
+
+    def test_reports_cursor_move_cadence_metrics(self) -> None:
+        from touchless_control.observability import analyze_session_entries
+
+        entries = [
+            {
+                "timestamp_ms": 1000,
+                "latency_ms": 10.0,
+                "primitive_types": ["pointing"],
+                "interaction_reasons": [],
+                "action_types": ["move_relative"],
+                "dispatch_successes": [True],
+                "features": {"tracking_lost": False},
+            },
+            {
+                "timestamp_ms": 1040,
+                "latency_ms": 10.0,
+                "primitive_types": ["pointing"],
+                "interaction_reasons": [],
+                "action_types": [],
+                "dispatch_successes": [],
+                "features": {"tracking_lost": False},
+            },
+            {
+                "timestamp_ms": 1080,
+                "latency_ms": 10.0,
+                "primitive_types": ["pointing"],
+                "interaction_reasons": [],
+                "action_types": ["move_relative"],
+                "dispatch_successes": [True],
+                "features": {"tracking_lost": False},
+            },
+            {
+                "timestamp_ms": 1160,
+                "latency_ms": 10.0,
+                "primitive_types": ["pointing"],
+                "interaction_reasons": [],
+                "action_types": ["move_relative"],
+                "dispatch_successes": [True],
+                "features": {"tracking_lost": False},
+            },
+        ]
+
+        report = analyze_session_entries(entries)
+
+        self.assertEqual(report.move_count, 3)
+        self.assertAlmostEqual(report.cursor_update_hz, 18.75)
+        self.assertEqual(report.move_gap_p50_ms, 80.0)
+        self.assertEqual(report.move_gap_p95_ms, 80.0)
+        self.assertEqual(report.move_gap_max_ms, 80.0)
+        self.assertEqual(report.movement_coverage, 0.75)
 
     def test_report_lines_are_cli_friendly(self) -> None:
         from touchless_control.observability import SessionReport
@@ -64,6 +118,12 @@ class SessionReportTests(unittest.TestCase):
             p99_latency_ms=40.0,
             primitive_counts={"pointing": 2},
             action_counts={"move_relative": 2},
+            move_count=2,
+            cursor_update_hz=2.0,
+            movement_coverage=1.0,
+            move_gap_p50_ms=40.0,
+            move_gap_p95_ms=40.0,
+            move_gap_max_ms=40.0,
         )
 
         lines = report.to_lines()
@@ -71,6 +131,9 @@ class SessionReportTests(unittest.TestCase):
         self.assertIn("session_report total_records=2", lines[0])
         self.assertIn("effective_fps=2.00", lines[0])
         self.assertIn("p95_latency_ms=40.0", lines[0])
+        self.assertIn("cursor_update_hz=2.00", lines[0])
+        self.assertIn("movement_coverage=1.00", lines[0])
+        self.assertIn("move_gap_p95_ms=40.0", lines[0])
         self.assertIn("primitives pointing=2", lines[1])
         self.assertIn("actions move_relative=2", lines[2])
 

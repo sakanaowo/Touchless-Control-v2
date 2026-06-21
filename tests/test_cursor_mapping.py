@@ -36,6 +36,38 @@ class CursorMapperTests(unittest.TestCase):
         self.assertLessEqual(abs(command.dx_px), 120)
         self.assertLessEqual(abs(command.dy_px), 120)
 
+    def test_can_invert_configured_motion_axes(self) -> None:
+        from touchless_control.control import CursorMapper
+
+        feature = _feature(timestamp_ms=40, hand_velocity_norm=(0.03, -0.02))
+        normal = CursorMapper().map_motion(feature)
+        inverted = CursorMapper(invert_x=True, invert_y=True).map_motion(feature)
+
+        self.assertEqual(inverted.dx_px, -normal.dx_px)
+        self.assertEqual(inverted.dy_px, -normal.dy_px)
+
+    def test_gain_scale_increases_cursor_response(self) -> None:
+        from touchless_control.control import CursorMapper
+
+        feature = _feature(timestamp_ms=50, hand_velocity_norm=(0.02, 0.0))
+        normal = CursorMapper().map_motion(feature)
+        faster = CursorMapper(gain_scale=1.5).map_motion(feature)
+
+        self.assertGreater(abs(faster.dx_px), abs(normal.dx_px))
+
+    def test_accumulates_small_intentional_motion_instead_of_dropping_it(self) -> None:
+        from touchless_control.control import CursorMapper
+
+        mapper = CursorMapper()
+        commands = [
+            mapper.map_motion(_feature(timestamp_ms=60 + index, hand_velocity_norm=(0.004, 0.0)))
+            for index in range(8)
+        ]
+
+        move_commands = [command for command in commands if command.type == "move_relative"]
+        self.assertGreaterEqual(len(move_commands), 3)
+        self.assertGreater(sum(abs(command.dx_px or 0) for command in move_commands), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

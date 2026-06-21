@@ -90,6 +90,23 @@ class MediaPipeHandPerceptionTests(unittest.TestCase):
         self.assertAlmostEqual(hand_frame.presence_confidence, 0.91)
         self.assertAlmostEqual(hand_frame.tracking_confidence, 0.91)
 
+    def test_poll_latest_consumes_hand_frame_once(self) -> None:
+        from touchless_control.perception import MediaPipeHandPerception
+
+        factory = _CapturingFactory()
+        perception = MediaPipeHandPerception(detector_factory=factory)
+        landmarks = [_Landmark(index / 20, index / 40, -0.01) for index in range(21)]
+        world_landmarks = [_Landmark(index / 10, index / 30, 0.02) for index in range(21)]
+
+        factory.callback(
+            _Result(landmarks, world_landmarks, _Category("Right", 0.91)),
+            None,
+            55,
+        )
+
+        self.assertIsNotNone(perception.poll_latest())
+        self.assertIsNone(perception.poll_latest())
+
     def test_callback_ignores_empty_results(self) -> None:
         from touchless_control.perception import MediaPipeHandPerception
 

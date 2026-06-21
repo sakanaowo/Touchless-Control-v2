@@ -51,13 +51,20 @@ description: Acceptance and coverage plan for the touchless mouse-control MVP
 - [x] `live` CLI output reports `mode` and backend so dry-run and real OS dispatch are visible.
 - [x] `live` CLI accepts `--log <path>` and reports session `log_records`, `p95_latency_ms`, and `log_path`.
 - [x] `live` CLI accepts `--preview` and reports `preview_frames` for observable camera/runtime validation.
+- [x] `live` CLI defaults to 640x480 capture, 60 FPS request, 960x720 resizable preview, responsive sensitivity, horizontal cursor inversion, cursor gain scaling, and exposes flags for preset, axis inversion, poll timing, and camera read-failure tolerance.
 - [x] `live` CLI suppresses native MediaPipe logs by default and can re-enable them with `--verbose-mediapipe`.
 - [x] Live runner connects capture, perception, feature normalization, runtime pipeline, and controller dispatch through injectable boundaries.
 - [x] Live runner waits briefly for async perception callbacks before counting a frame as no-hand.
+- [x] Live runner processes only fresh hand-frame timestamps so stale MediaPipe live-stream outputs do not repeatedly dispatch cursor movement.
+- [x] Live runner tolerates transient camera read misses before stopping and reports `read_failures`.
+- [x] Live runner configures camera width, height, FPS, and buffer size through the capture boundary when supported.
 - [x] Live dry-run mode avoids creating the real OS controller and dispatches through a no-op controller.
 - [x] Live runner records one structured session log entry per processed hand frame and can write JSONL for manual metric regression.
 - [x] Live preview renders camera frames with state, tracking status, pinch/stability metrics, commands, backend, and latency through an injectable renderer.
 - [x] Live preview draws MediaPipe hand landmarks over the camera frame when a hand frame is available.
+- [x] Live preview draws landmarks using actual frame dimensions so keypoints stay aligned when camera output differs from requested dimensions.
+- [x] Live preview opens a resizable OpenCV window and applies initial preview dimensions.
+- [x] Live preview requests keep-ratio behavior for resizable OpenCV windows when the backend supports it.
 - [x] Live preview displays FPS, frame/hand/command/dispatch/failure counters, action badge, and thumb-index pinch line/center.
 - [x] Live preview can stop the live loop when the tester presses the preview quit key.
 
@@ -85,6 +92,9 @@ description: Acceptance and coverage plan for the touchless mouse-control MVP
 - [x] Applies deadzone for small hand motion.
 - [x] Applies EMA/adaptive smoothing.
 - [x] Applies acceleration and clamps `max_step`.
+- [x] Supports configurable X/Y inversion for camera orientation fixes.
+- [x] Supports configurable gain scaling for live responsiveness tuning.
+- [x] Accumulates residual/subpixel movement so small intentional motion can emit cursor updates instead of being fully dropped by deadzone.
 - [x] Emits relative movement, never absolute cursor targets.
 
 ### OS Controller
@@ -112,7 +122,7 @@ description: Acceptance and coverage plan for the touchless mouse-control MVP
 ### Observability
 - [x] Records timestamp, state, primitive types, transition reasons, action types, dispatch outcomes, latency, and key feature values.
 - [x] Summarizes action count, dispatch count, failure count, tracking-loss count, average latency, and p95 latency.
-- [x] `report --log` analyzes JSONL sessions and reports effective FPS, p95/p99 latency, action/dispatch/failure/tracking-loss counts, primitive distribution, and action distribution.
+- [x] `report --log` analyzes JSONL sessions and reports effective FPS, p95/p99 latency, action/dispatch/failure/tracking-loss counts, primitive distribution, action distribution, cursor update Hz, movement coverage, and move-gap p95.
 
 ### Acceptance Automation
 - [x] Evaluates p95 latency against the 80 ms MVP budget from session summaries.
@@ -138,6 +148,7 @@ description: Acceptance and coverage plan for the touchless mouse-control MVP
 
 ## End-to-End Tests
 - [ ] `TP-MOVE-STRAIGHT`: move hand left/right/up/down 20 times; p95 latency < 80 ms; no movement spike beyond `max_step`.
+- [ ] `TP-MOVE-SLOW-PRECISE`: move hand slowly across a small target region; cursor update p95 gap < 50 ms; movement coverage >= 80%; no freeze > 150 ms.
 - [ ] `TP-MOVE-STATIONARY`: hold pointing for 5 seconds, 10 repetitions; RMS jitter <= 6 px.
 - [ ] `TP-CLICK-INTENT`: 100 short pinches; success >= 95%; p95 latency < 80 ms.
 - [ ] `TP-CLICK-FALSE`: 5 minutes idle/pointing/reposition; false click <= 0.5/min.
@@ -163,16 +174,16 @@ description: Acceptance and coverage plan for the touchless mouse-control MVP
 - Multimodal intent-context tests over synthetic `AttentionFrame` values.
 
 ## Test Reporting & Coverage
-- Report p50/p95/p99 latency, FPS, action success rate, false positives per minute, recovery time, tracking-loss rate, and log completeness.
-- Current report automation covers effective FPS, p95/p99 latency, action/primitive distributions, dispatch failures, and tracking-loss count; success-rate and false-positive classification still need scenario labels from manual protocols.
+- Report p50/p95/p99 latency, FPS, cursor update Hz, move-gap p50/p95/max, movement coverage, action success rate, false positives per minute, recovery time, tracking-loss rate, jitter, and log completeness.
+- Current report automation covers effective FPS, p95/p99 latency, action/primitive distributions, dispatch failures, tracking-loss count, cursor update Hz, movement coverage, and move-gap p95; success-rate, jitter, freeze, and false-positive classification still need scenario labels from manual protocols.
 - Coverage target: 100% of new state-machine and safety policy branches; documented exceptions only for hardware-only paths.
 - Current automated command: `uv run python -m unittest discover`.
 
 ## Manual Testing
-- Validate camera selection and startup with `live --dry-run --preview` and a hand visible in frame until `hand_frames > 0` and `preview_frames > 0`.
+- Validate camera selection and startup with `live --preview` and a hand visible in frame until `hand_frames > 0` and `preview_frames > 0`.
 - If `hand_frames=0`, capture `camera-snapshot` and inspect the saved frame for wrong camera source, dark image, blur, or framing problems.
-- Validate `live --dry-run --preview --log C:\tmp\touchless-session.jsonl` with a hand visible until the preview shows landmarks, pinch line, counters, and `Pointing`, then move/pinch/scroll until action badge/`commands > 0`, `log_records > 0`, and the overlay state changes are visible.
-- Validate `live` without `--dry-run` only after observable dry-run shows stable hand-frame, preview-frame, state-transition, command, and log counts.
+- Validate `live --preview --log C:\tmp\touchless-session.jsonl` with a hand visible until the preview shows landmarks, pinch line, counters, and `Pointing`, then move/pinch/scroll until action badge/`commands > 0`, `log_records > 0`, and the overlay state changes are visible.
+- If cursor direction is still wrong for a specific camera, retest with `--no-invert-x` or `--invert-y`.
 - Latest local dry-run reached `hand_frames=60` and `commands=0`; next manual step is moving/pinching/scrolling a visible hand in frame until commands are emitted.
 - Validate overlay state transitions.
 - Validate calibration flow with at least two users or repeated sessions.
@@ -182,6 +193,7 @@ description: Acceptance and coverage plan for the touchless mouse-control MVP
 ## Performance Testing
 - Measure frame capture, perception, normalization, interaction, queue, OS dispatch, overlay, and logging stages separately.
 - Prefer latest-frame processing; reject designs that build unbounded frame queues.
+- Product acceptance requires cursor update p95 gap < 50 ms during active movement, movement coverage >= 80%, effective tracking FPS >= 30, stationary jitter <= 6 px RMS, and no cursor freeze > 150 ms.
 
 ## Bug Tracking
 - Severity 1: stuck mouse-down, action while paused/tracking lost, uncontrolled scroll, crash during OS injection.

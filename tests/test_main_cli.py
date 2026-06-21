@@ -126,6 +126,16 @@ class MainCliTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(runner.max_frames, 3)
+        self.assertEqual(captured_kwargs["image_width"], 640)
+        self.assertEqual(captured_kwargs["image_height"], 480)
+        self.assertEqual(captured_kwargs["preview_width"], 960)
+        self.assertEqual(captured_kwargs["preview_height"], 720)
+        self.assertEqual(captured_kwargs["camera_fps"], 60)
+        self.assertEqual(captured_kwargs["preset_name"], "responsive")
+        self.assertTrue(captured_kwargs["invert_x"])
+        self.assertFalse(captured_kwargs["invert_y"])
+        self.assertEqual(captured_kwargs["cursor_gain_scale"], 1.25)
+        self.assertEqual(captured_kwargs["max_read_failures"], 10)
         self.assertTrue(captured_kwargs["suppress_native_logs"])
         self.assertTrue(captured_kwargs["preview"])
         self.assertEqual(captured_kwargs["log_path"], "C:/tmp/session.jsonl")
@@ -160,6 +170,66 @@ class MainCliTests(unittest.TestCase):
         )
 
         self.assertFalse(captured_kwargs["suppress_native_logs"])
+
+    def test_live_command_exposes_window_tuning_flags(self) -> None:
+        from main import main
+
+        captured_kwargs = {}
+        runner = _LiveRunner(
+            LiveRunResult(
+                success=True,
+                frames_read=1,
+                hand_frames=0,
+                commands_emitted=0,
+                dispatches=0,
+                failures=0,
+            )
+        )
+
+        main(
+            [
+                "live",
+                "--frames",
+                "1",
+                "--width",
+                "1280",
+                "--height",
+                "720",
+                "--preview-width",
+                "1024",
+                "--preview-height",
+                "768",
+                "--camera-fps",
+                "30",
+                "--preset",
+                "balanced",
+                "--no-invert-x",
+                "--invert-y",
+                "--cursor-gain-scale",
+                "1.5",
+                "--poll-timeout-ms",
+                "8",
+                "--poll-interval-ms",
+                "1",
+                "--max-read-failures",
+                "3",
+            ],
+            live_runner_factory=lambda **kwargs: captured_kwargs.update(kwargs) or runner,
+            print_fn=lambda _message: None,
+        )
+
+        self.assertEqual(captured_kwargs["image_width"], 1280)
+        self.assertEqual(captured_kwargs["image_height"], 720)
+        self.assertEqual(captured_kwargs["preview_width"], 1024)
+        self.assertEqual(captured_kwargs["preview_height"], 768)
+        self.assertEqual(captured_kwargs["camera_fps"], 30)
+        self.assertEqual(captured_kwargs["preset_name"], "balanced")
+        self.assertFalse(captured_kwargs["invert_x"])
+        self.assertTrue(captured_kwargs["invert_y"])
+        self.assertEqual(captured_kwargs["cursor_gain_scale"], 1.5)
+        self.assertEqual(captured_kwargs["poll_timeout_ms"], 8)
+        self.assertEqual(captured_kwargs["poll_interval_ms"], 1)
+        self.assertEqual(captured_kwargs["max_read_failures"], 3)
 
     def test_report_command_reads_session_log_and_prints_summary(self) -> None:
         from main import main

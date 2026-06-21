@@ -12,8 +12,9 @@ description: Implementation notes, changed files, and code guidelines for the to
 - Camera/MediaPipe runtime uses Python 3.12 because MediaPipe is not usable with the previous Python 3.14 project setting.
 - Camera smoke command: `uv run python main.py camera-smoke --frames 30 --camera-index 0 --model C:\tmp\hand_landmarker.task`.
 - Camera snapshot command: `uv run python main.py camera-snapshot --camera-index 0 --output C:\tmp\touchless-frame.jpg`.
-- Live observable dry-run command: `uv run python main.py live --dry-run --preview --frames 300 --camera-index 0 --model C:\tmp\hand_landmarker.task --log C:\tmp\touchless-session.jsonl`.
+- Live observable command: `uv run python main.py live --preview --frames 300 --camera-index 0 --model C:\tmp\hand_landmarker.task --log C:\tmp\touchless-session.jsonl`.
 - Live OS-dispatch command: `uv run python main.py live --frames 300 --camera-index 0 --model C:\tmp\hand_landmarker.task`.
+- Live mode defaults to `--width 640 --height 480 --camera-fps 60 --preview-width 960 --preview-height 720 --preset responsive --invert-x --cursor-gain-scale 1.25 --max-read-failures 10`; use `--no-invert-x`, `--invert-y`, `--preset balanced`, explicit width/height values, or gain scaling when tuning a specific camera setup.
 - Session report command: `uv run python main.py report --log C:\tmp\touchless-session.jsonl`.
 - Add `--verbose-mediapipe` only when debugging native MediaPipe logs; live mode suppresses native stderr noise by default.
 - Verification command for the current implementation slice: `uv run python -m unittest discover`.
@@ -154,10 +155,20 @@ Planned package boundaries remain:
 - Live preview passes the current `HandFrame` to the renderer so MediaPipe landmarks are drawn over the camera frame.
 - Live preview now displays live FPS/counters, highlights emitted commands with an action badge, and draws the thumb-index pinch line plus pinch center for threshold debugging.
 - Added `report --log <path>` CLI to summarize session JSONL files after real/manual runs.
-- Session reports include total records, duration, effective FPS, action/dispatch/failure/tracking-loss counts, p95/p99 latency, primitive distribution, and action distribution.
+- Session reports include total records, duration, effective FPS, action/dispatch/failure/tracking-loss counts, p95/p99 latency, primitive distribution, action distribution, cursor update Hz, movement coverage, and move-gap p95.
 - Live mode suppresses noisy native MediaPipe stderr logs by default and exposes `--verbose-mediapipe` for debugging.
 - Live runs flush queued commands every processed hand frame so cursor actions do not accumulate behind camera processing.
 - Live mode waits briefly for async MediaPipe callbacks after frame submission before deciding that no hand frame is available.
+- Live mode now builds the default pipeline from a named sensitivity preset; the live default is `responsive` to reduce perceived gesture lag during window testing while preserving `gentle` and `balanced` as CLI-selectable profiles.
+- Cursor mapping supports configurable X/Y inversion. Live mode defaults to horizontal inversion for webcam-style control and exposes `--no-invert-x` and `--invert-y` for camera-specific orientation fixes.
+- Cursor mapping supports `gain_scale`; live mode defaults to `--cursor-gain-scale 1.25` for a more responsive pointer.
+- Cursor mapping keeps subpixel residual movement and uses a lower micro-deadzone for small intentional motion, so slow hand movement is accumulated instead of being dropped until it exceeds the original preset deadzone.
+- Live mode keeps capture at 640x480 by default for FPS and opens a resizable 960x720 preview window, with separate `--width`/`--height` and `--preview-width`/`--preview-height` controls.
+- Live mode requests low-latency camera settings through OpenCV capture properties: frame width, frame height, FPS, and buffer size.
+- Live preview draws hand landmarks against the actual rendered frame dimensions instead of configured metadata, preventing keypoint drift when the camera returns a different resolution than requested.
+- Live preview requests OpenCV keep-ratio window behavior so the default 4:3 capture is not stretched into a 16:9 preview.
+- MediaPipe live-stream hand frames are consumed once. `LiveRunner` also skips any hand frame whose timestamp is not newer than the last processed hand timestamp so stale async outputs cannot drive repeated cursor dispatch.
+- Live camera reads now tolerate transient `VideoCapture.read()` misses and only stop after the configured consecutive failure limit. Results include `read_failures`, with `camera_read_failed` for startup read failure and `camera_read_interrupted` for mid-session interruption.
 
 ### Patterns & Best Practices
 - Contracts are frozen dataclasses with slots so state-machine inputs remain immutable per frame.
@@ -175,7 +186,7 @@ Planned package boundaries remain:
 - Session logging is currently in memory and IO-free; a JSONL/file sink can be added later without changing the pipeline-facing record API.
 - Acceptance automation consumes session summaries; real camera and OS acceptance still requires manual/hardware execution.
 - Runtime pipeline remains IO-free; `LiveRunner` owns camera IO and OS dispatch wiring.
-- Human testing should use `live --dry-run --preview --log <path>` first, then remove `--dry-run` only after preview and logs show stable hand frames, state transitions, and command emission.
+- Human testing can use `live --preview --log <path>` directly on the target Windows setup so preview, OS dispatch, and session metrics are validated together.
 - Future face-recognition and face-attention models should plug into `IntentContext` and avoid coupling directly to `PrimitiveDetector` or `InteractionStateMachine`.
 - Refactored package layout by responsibility so future face and attention models can be added under `vision/face` and `vision/attention` without growing the hand modules.
 - Split hand interaction into `interaction/primitives.py` and `interaction/state_machine.py`.
@@ -272,3 +283,15 @@ Planned package boundaries remain:
 - Preview diagnostics green step: `uv run python -m unittest tests.test_preview tests.test_live_runner` passed with 8 tests after adding `PreviewStats`, live FPS/counters, action badge, and pinch line/center rendering.
 - Session report red step: `uv run python -m unittest tests.test_report tests.test_main_cli` failed because `SessionReport`, `analyze_session_log`, and `main.py report` were missing.
 - Session report green step: `uv run python -m unittest tests.test_report tests.test_main_cli` passed with 8 tests after adding JSONL report analysis and report CLI output.
+- Live tuning red step: `uv run python -m unittest tests.test_cursor_mapping tests.test_live_runner tests.test_main_cli` failed with expected missing `invert_x`, `preset_name`, `max_read_failures`, live tuning CLI flags, and 640x480 default resolution behavior.
+- Live tuning green step: `uv run python -m unittest tests.test_cursor_mapping tests.test_live_runner tests.test_main_cli` passed with 19 tests after adding cursor axis inversion, responsive live pipeline wiring, transient camera read-failure tolerance, larger live defaults, and CLI tuning flags.
+- Window/FPS tuning red step: `uv run python -m unittest tests.test_cursor_mapping tests.test_live_runner tests.test_main_cli tests.test_preview` failed with expected missing `gain_scale`, `camera_fps`, preview sizing flags, resizable preview construction, and landmark scaling against actual frame dimensions.
+- Window/FPS tuning green step: `uv run python -m unittest tests.test_cursor_mapping tests.test_live_runner tests.test_main_cli tests.test_preview` passed with 25 tests after decoupling capture and preview sizes, configuring camera FPS/buffer properties, adding cursor gain scaling, and drawing landmarks using actual display dimensions.
+- Stale MediaPipe output red step: `uv run python -m unittest tests.test_perception tests.test_live_runner tests.test_main_cli tests.test_preview` failed because `MediaPipeHandPerception.poll_latest()` returned the same hand frame repeatedly, `LiveRunner` processed repeated hand timestamps, live default preview height remained 540, and preview window creation did not request keep-ratio behavior.
+- Stale MediaPipe output green step: `uv run python -m unittest tests.test_perception tests.test_live_runner tests.test_main_cli tests.test_preview` passed with 27 tests after consuming hand frames once, skipping stale timestamps in live dispatch, defaulting preview to 960x720, and enabling `WINDOW_KEEPRATIO` where OpenCV provides it.
+- Product pointer red step: `uv run python -m unittest tests.test_cursor_mapping tests.test_report` failed because small repeated hand motion below the preset deadzone emitted no movement and session reports did not expose cursor cadence metrics.
+- Product pointer green step: `uv run python -m unittest tests.test_cursor_mapping tests.test_report tests.test_main_cli` passed with 16 tests after adding cursor residual/subpixel accumulation and report metrics for cursor update Hz, movement coverage, and move gaps.
+
+## Product Readiness Notes
+- The MVP foundation is not yet an acceptable end-user product. Current manual log analysis showed low pipeline latency but unacceptable cursor cadence: `cursor_update_hz=5.05`, `movement_coverage=0.33`, and `move_gap_p95_ms=516.0`.
+- The residual cursor mapper is a first corrective slice. A full product pointer engine still needs position+velocity fusion, adaptive jitter-aware deadzone, control-region calibration, and scenario-labeled acceptance gates.

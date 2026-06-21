@@ -20,6 +20,12 @@ class SessionReport:
     p99_latency_ms: float | None
     primitive_counts: dict[str, int]
     action_counts: dict[str, int]
+    move_count: int = 0
+    cursor_update_hz: float = 0.0
+    movement_coverage: float = 0.0
+    move_gap_p50_ms: float | None = None
+    move_gap_p95_ms: float | None = None
+    move_gap_max_ms: float | None = None
 
     def to_lines(self) -> tuple[str, ...]:
         return (
@@ -32,7 +38,10 @@ class SessionReport:
             f"failures={self.failure_count} "
             f"tracking_loss={self.tracking_loss_count} "
             f"p95_latency_ms={_format_optional(self.p95_latency_ms)} "
-            f"p99_latency_ms={_format_optional(self.p99_latency_ms)}",
+            f"p99_latency_ms={_format_optional(self.p99_latency_ms)} "
+            f"cursor_update_hz={self.cursor_update_hz:.2f} "
+            f"movement_coverage={self.movement_coverage:.2f} "
+            f"move_gap_p95_ms={_format_optional(self.move_gap_p95_ms)}",
             "primitives " + _format_counts(self.primitive_counts),
             "actions " + _format_counts(self.action_counts),
         )
@@ -62,11 +71,14 @@ def analyze_session_entries(entries: Iterable[dict[str, Any]]) -> SessionReport:
     dispatch_count = 0
     failure_count = 0
     tracking_loss_count = 0
+    move_timestamps: list[int] = []
 
     for entry in records:
         primitive_counts.update(entry.get("primitive_types", ()))
         action_types = entry.get("action_types", ())
         action_counts.update(action_types)
+        if "move_relative" in action_types:
+            move_timestamps.append(int(entry["timestamp_ms"]))
         action_count += len(action_types)
         dispatch_successes = entry.get("dispatch_successes", ())
         dispatch_count += len(dispatch_successes)
@@ -77,6 +89,8 @@ def analyze_session_entries(entries: Iterable[dict[str, Any]]) -> SessionReport:
 
     duration_s = _duration_s(timestamps)
     effective_fps = (len(records) / duration_s) if duration_s > 0 else 0.0
+    move_gaps = _gaps(move_timestamps)
+    move_count = len(move_timestamps)
     return SessionReport(
         total_records=len(records),
         duration_s=duration_s,
@@ -89,6 +103,12 @@ def analyze_session_entries(entries: Iterable[dict[str, Any]]) -> SessionReport:
         p99_latency_ms=_percentile(latencies, 0.99),
         primitive_counts=dict(sorted(primitive_counts.items())),
         action_counts=dict(sorted(action_counts.items())),
+        move_count=move_count,
+        cursor_update_hz=(move_count / duration_s) if duration_s > 0 else 0.0,
+        movement_coverage=(move_count / len(records)) if records else 0.0,
+        move_gap_p50_ms=_percentile(move_gaps, 0.50),
+        move_gap_p95_ms=_percentile(move_gaps, 0.95),
+        move_gap_max_ms=max(move_gaps) if move_gaps else None,
     )
 
 
@@ -104,6 +124,13 @@ def _percentile(values: list[float], percentile: float) -> float | None:
     ordered = sorted(values)
     index = max(0, math.ceil(percentile * len(ordered)) - 1)
     return ordered[index]
+
+
+def _gaps(timestamps: list[int]) -> list[float]:
+    return [
+        float(current - previous)
+        for previous, current in zip(timestamps, timestamps[1:])
+    ]
 
 
 def _format_counts(counts: dict[str, int]) -> str:

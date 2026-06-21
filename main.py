@@ -33,9 +33,19 @@ def main(
     live.add_argument("--frames", type=int, default=0)
     live.add_argument("--width", type=int, default=640)
     live.add_argument("--height", type=int, default=480)
+    live.add_argument("--preview-width", type=int, default=960)
+    live.add_argument("--preview-height", type=int, default=720)
+    live.add_argument("--camera-fps", type=int, default=60)
     live.add_argument("--model", default=None)
     live.add_argument("--dry-run", action="store_true")
     live.add_argument("--preview", action="store_true")
+    live.add_argument("--preset", choices=("gentle", "balanced", "responsive"), default="responsive")
+    live.add_argument("--invert-x", action=argparse.BooleanOptionalAction, default=True)
+    live.add_argument("--invert-y", action=argparse.BooleanOptionalAction, default=False)
+    live.add_argument("--cursor-gain-scale", type=float, default=1.25)
+    live.add_argument("--poll-timeout-ms", type=int, default=20)
+    live.add_argument("--poll-interval-ms", type=int, default=2)
+    live.add_argument("--max-read-failures", type=int, default=10)
     live.add_argument("--verbose-mediapipe", action="store_true")
     live.add_argument("--log", dest="log_path", default=None)
     report = subparsers.add_parser("report")
@@ -76,9 +86,19 @@ def main(
             camera_index=args.camera_index,
             image_width=args.width,
             image_height=args.height,
+            preview_width=args.preview_width,
+            preview_height=args.preview_height,
+            camera_fps=args.camera_fps,
             model_asset_path=args.model,
             dry_run=args.dry_run,
             preview=args.preview,
+            preset_name=args.preset,
+            invert_x=args.invert_x,
+            invert_y=args.invert_y,
+            cursor_gain_scale=args.cursor_gain_scale,
+            poll_timeout_ms=args.poll_timeout_ms,
+            poll_interval_ms=args.poll_interval_ms,
+            max_read_failures=args.max_read_failures,
             suppress_native_logs=not args.verbose_mediapipe,
             log_path=args.log_path,
         )
@@ -89,6 +109,7 @@ def main(
             f"mode={'dry_run' if args.dry_run else 'dispatch'} "
             f"backend={result.backend} "
             f"frames_read={result.frames_read} "
+            f"read_failures={result.read_failures} "
             f"hand_frames={result.hand_frames} "
             f"commands={result.commands_emitted} "
             f"dispatches={result.dispatches} "

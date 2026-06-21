@@ -10,6 +10,13 @@ class _Frame:
         return self
 
 
+class _ShapedFrame:
+    shape = (480, 640, 3)
+
+    def copy(self):
+        return self
+
+
 class PreviewRendererTests(unittest.TestCase):
     def test_opencv_preview_draws_hand_landmarks_when_hand_frame_is_available(self) -> None:
         from touchless_control.presentation.preview import OpenCVPreviewRenderer
@@ -59,6 +66,105 @@ class PreviewRendererTests(unittest.TestCase):
         self.assertTrue(any(name == "circle" for name, _args in calls))
         circle_call = next(args for name, args in calls if name == "circle")
         self.assertEqual(circle_call[1], (320, 120))
+
+    def test_opencv_preview_uses_actual_frame_dimensions_for_landmarks(self) -> None:
+        from touchless_control.presentation.preview import OpenCVPreviewRenderer
+
+        calls = []
+        fake_cv2 = SimpleNamespace(
+            FONT_HERSHEY_SIMPLEX=0,
+            LINE_AA=16,
+            putText=lambda *args: calls.append(("putText", args)),
+            rectangle=lambda *args: calls.append(("rectangle", args)),
+            circle=lambda *args: calls.append(("circle", args)),
+            line=lambda *args: calls.append(("line", args)),
+            imshow=lambda *args: calls.append(("imshow", args)),
+            waitKey=lambda _delay: -1,
+        )
+        original_cv2 = sys.modules.get("cv2")
+        sys.modules["cv2"] = fake_cv2
+        try:
+            hand_frame = HandFrame(
+                timestamp_ms=1,
+                image_width=960,
+                image_height=540,
+                landmarks_img=tuple((0.5, 0.25, 0.0) for _ in range(21)),
+                landmarks_world=tuple((0.0, 0.0, 0.0) for _ in range(21)),
+                handedness="Right",
+                detection_confidence=0.9,
+                presence_confidence=0.9,
+                tracking_confidence=0.9,
+            )
+
+            OpenCVPreviewRenderer().render(
+                _ShapedFrame(),
+                None,
+                commands=(),
+                results=(),
+                backend="dry_run",
+                dry_run=True,
+                hand_frame=hand_frame,
+            )
+        finally:
+            if original_cv2 is None:
+                sys.modules.pop("cv2", None)
+            else:
+                sys.modules["cv2"] = original_cv2
+
+        circle_call = next(args for name, args in calls if name == "circle")
+        self.assertEqual(circle_call[1], (320, 120))
+
+    def test_opencv_preview_creates_resizable_window_once(self) -> None:
+        from touchless_control.presentation.preview import OpenCVPreviewRenderer
+
+        calls = []
+        fake_cv2 = SimpleNamespace(
+            FONT_HERSHEY_SIMPLEX=0,
+            LINE_AA=16,
+            WINDOW_NORMAL=0,
+            WINDOW_KEEPRATIO=16,
+            namedWindow=lambda *args: calls.append(("namedWindow", args)),
+            resizeWindow=lambda *args: calls.append(("resizeWindow", args)),
+            putText=lambda *args: calls.append(("putText", args)),
+            rectangle=lambda *args: calls.append(("rectangle", args)),
+            circle=lambda *args: calls.append(("circle", args)),
+            line=lambda *args: calls.append(("line", args)),
+            imshow=lambda *args: calls.append(("imshow", args)),
+            waitKey=lambda _delay: -1,
+        )
+        original_cv2 = sys.modules.get("cv2")
+        sys.modules["cv2"] = fake_cv2
+        try:
+            renderer = OpenCVPreviewRenderer(preview_width=960, preview_height=720)
+            renderer.render(
+                _Frame(),
+                None,
+                commands=(),
+                results=(),
+                backend="dry_run",
+                dry_run=True,
+            )
+            renderer.render(
+                _Frame(),
+                None,
+                commands=(),
+                results=(),
+                backend="dry_run",
+                dry_run=True,
+            )
+        finally:
+            if original_cv2 is None:
+                sys.modules.pop("cv2", None)
+            else:
+                sys.modules["cv2"] = original_cv2
+
+        self.assertEqual(
+            [name for name, _args in calls].count("namedWindow"),
+            1,
+        )
+        named_window = next(args for name, args in calls if name == "namedWindow")
+        self.assertEqual(named_window[1], 16)
+        self.assertIn(("resizeWindow", ("Touchless Control Preview", 960, 720)), calls)
 
     def test_opencv_preview_displays_stats_action_badge_and_pinch_line(self) -> None:
         from touchless_control.presentation.preview import OpenCVPreviewRenderer, PreviewStats
