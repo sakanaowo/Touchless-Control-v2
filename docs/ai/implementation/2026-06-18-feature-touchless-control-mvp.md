@@ -11,6 +11,10 @@ description: Implementation notes, changed files, and code guidelines for the to
 - Python is run through `uv` in this environment because `python` and `py` are not directly available on PATH.
 - Camera/MediaPipe runtime uses Python 3.12 because MediaPipe is not usable with the previous Python 3.14 project setting.
 - Camera smoke command: `uv run python main.py camera-smoke --frames 30 --camera-index 0 --model C:\tmp\hand_landmarker.task`.
+- Camera snapshot command: `uv run python main.py camera-snapshot --camera-index 0 --output C:\tmp\touchless-frame.jpg`.
+- Live observable dry-run command: `uv run python main.py live --dry-run --preview --frames 300 --camera-index 0 --model C:\tmp\hand_landmarker.task --log C:\tmp\touchless-session.jsonl`.
+- Live OS-dispatch command: `uv run python main.py live --frames 300 --camera-index 0 --model C:\tmp\hand_landmarker.task`.
+- Add `--verbose-mediapipe` only when debugging native MediaPipe logs; live mode suppresses native stderr noise by default.
 - Verification command for the current implementation slice: `uv run python -m unittest discover`.
 - AI docs validation command: `npx ai-devkit@latest lint --feature touchless-control-mvp`.
 
@@ -19,7 +23,7 @@ Current package layout:
 - `touchless_control/__init__.py`: public package exports.
 - `touchless_control/core/contracts.py`: immutable contracts for hand, face/attention intent context, primitives, interactions, actions, and OS dispatch.
 - `touchless_control/core/config.py`: MVP sensitivity presets and initial calibration profile/service.
-- `touchless_control/vision/camera.py`: OpenCV camera smoke runner for MediaPipe startup validation.
+- `touchless_control/vision/camera.py`: OpenCV camera smoke runner and snapshot runner for MediaPipe startup and camera-source validation.
 - `touchless_control/vision/hands/mediapipe.py`: injectable MediaPipe hand perception adapter and one-hand live-stream config.
 - `touchless_control/vision/hands/features.py`: hand feature extraction from `HandFrame` to `FeatureFrame`.
 - `touchless_control/vision/face/`: reserved package for future face-recognition model integration.
@@ -32,8 +36,10 @@ Current package layout:
 - `touchless_control/control/os/factory.py`: OS auto-detection for mouse-controller selection.
 - `touchless_control/control/os/windows.py`: Windows mouse-controller payload adapter and `SendInput` sender.
 - `touchless_control/control/os/linux.py`: Linux/uinput-style mouse-controller payload adapter.
-- `touchless_control/runtime/pipeline.py`: multimodal-ready runtime pipeline that connects intent context, primitives, state machine, cursor mapping, and action queue.
+- `touchless_control/runtime/pipeline.py`: multimodal-ready runtime pipeline that connects intent context, primitives, state machine, cursor mapping, and action queue, while retaining the latest primitive and interaction events for live logging.
+- `touchless_control/runtime/live.py`: live camera runtime runner that connects camera capture, MediaPipe perception, feature normalization, pipeline stepping, queue flushing, dry-run or OS dispatch, and optional JSONL session logging.
 - `touchless_control/presentation/overlay.py`: overlay snapshot presenter for state, tracking status, active mode, and latency warning data.
+- `touchless_control/presentation/preview.py`: OpenCV preview renderer that displays camera frames with hand landmarks, pinch line/center, action badge, live counters/FPS, runtime state, tracking, command, backend, and latency data for human validation.
 - `touchless_control/observability/logger.py`: structured session log entries and summary metrics.
 - `touchless_control/observability/acceptance.py`: automated acceptance summary checks and threshold tuning helpers.
 - Compatibility wrappers remain at `touchless_control.contracts`, `config`, `camera`, `perception`, `features`, `interaction`, `control`, `runtime`, `presentation`, `observability`, and `acceptance`.
@@ -49,9 +55,11 @@ Current package layout:
 - `tests/test_interaction_flows.py`: cross-component click, drag, scroll, tracking-loss, and paused-flow integration tests.
 - `tests/test_cursor_mapping.py`: deadzone, relative movement, and max-step clamp tests.
 - `tests/test_mouse_controller.py`: Windows/Linux controller payload mapping and dispatch-error tests.
-- `tests/test_main_cli.py`: `camera-smoke` CLI tests.
+- `tests/test_main_cli.py`: `camera-smoke` and `live` CLI tests.
+- `tests/test_live_runner.py`: live runner loop, dry-run controller, and dispatch integration tests.
 - `tests/test_action_queue.py`: queue coalescing, button ordering, safe release, and flush tests.
 - `tests/test_overlay.py`: overlay snapshot state, mode, tracking-status, and latency-warning tests.
+- `tests/test_preview.py`: OpenCV preview renderer text/landmark drawing tests using a fake `cv2` module.
 - `tests/test_observability.py`: session log record and summary metric tests.
 - `tests/test_runtime_pipeline.py`: runtime movement dispatch and paused-state gating tests.
 - `tests/test_package_layout.py`: scaled package-path import tests and legacy import compatibility tests.
@@ -93,8 +101,11 @@ Planned package boundaries remain:
 - The adapter converts MediaPipe-like callback results into immutable `HandFrame` values and keeps only the latest valid frame.
 - Added `create_mediapipe_detector_factory()` for real MediaPipe startup.
 - The MediaPipe factory supports the legacy `mediapipe.solutions.hands` path when available and the current MediaPipe Tasks API when only `mediapipe.tasks` is available.
-- MediaPipe Tasks requires a `hand_landmarker.task` model path through `--model` or `TOUCHLESS_HAND_LANDMARKER_MODEL`.
+- When a `hand_landmarker.task` model path is provided through `--model` or `TOUCHLESS_HAND_LANDMARKER_MODEL`, the MediaPipe factory now prefers the current MediaPipe Tasks API even if the legacy `mediapipe.solutions` package is also present.
+- The legacy `mediapipe.solutions.hands` path remains only as a no-model fallback.
 - Added `CameraSmokeRunner` and `camera-smoke` CLI for OpenCV camera startup and MediaPipe detector smoke tests.
+- Added `CameraSnapshotRunner` and `camera-snapshot` CLI for saving a real camera frame when hand detection returns zero frames.
+- Camera smoke waits briefly for async MediaPipe callbacks after each submitted frame so hand detections are not missed by immediate polling.
 - Added `create_mouse_controller()` to auto-select Windows or Linux controller by operating system name.
 - Implemented `FeatureNormalizer` for palm scale, palm center, canonical landmark points, index direction, hand velocity, pinch ratio, finger count, two-finger readiness, open-palm signal, and tracking-loss flag.
 - Tracking stability currently uses the minimum of detection, presence, and tracking confidence as the safety-first score.
@@ -129,6 +140,19 @@ Planned package boundaries remain:
 - Added future-facing face and attention contracts without adding a face model dependency.
 - Added attention gating at the runtime boundary: when `AttentionFrame.attention_on_screen` is false, movement/click/scroll dispatch is blocked; active drag emits a safe `left_up`.
 - Attention-based drag release now moves the interaction state to `Cooldown` immediately so a later attention recovery cannot emit a duplicate `left_up`.
+- Added `LiveRunner` and `live` CLI command for human MVP testing.
+- `live --dry-run` runs the full camera/perception/feature/pipeline loop but dispatches through a no-op controller.
+- `live --preview` opens an OpenCV preview window that overlays observable state, tracking status, pinch/stability metrics, emitted commands, backend, and latency on the camera feed.
+- `live` without `--dry-run` uses OS auto-detection and Windows `SendInput` on Windows.
+- Live CLI output includes `mode=dry_run|dispatch` and backend name, for example `backend=dry_run` or `backend=windows_sendinput`.
+- Live CLI output includes `preview_frames` so manual testers can verify frames were rendered to the observable preview path.
+- Live CLI accepts `--log <path>` to write one JSONL session record per processed hand frame, and output reports `log_records` plus `p95_latency_ms`.
+- Live JSONL records now include latest primitive types and interaction transition reasons from the runtime pipeline.
+- Live preview passes the current `HandFrame` to the renderer so MediaPipe landmarks are drawn over the camera frame.
+- Live preview now displays live FPS/counters, highlights emitted commands with an action badge, and draws the thumb-index pinch line plus pinch center for threshold debugging.
+- Live mode suppresses noisy native MediaPipe stderr logs by default and exposes `--verbose-mediapipe` for debugging.
+- Live runs flush queued commands every processed hand frame so cursor actions do not accumulate behind camera processing.
+- Live mode waits briefly for async MediaPipe callbacks after frame submission before deciding that no hand frame is available.
 
 ### Patterns & Best Practices
 - Contracts are frozen dataclasses with slots so state-machine inputs remain immutable per frame.
@@ -145,7 +169,8 @@ Planned package boundaries remain:
 - Overlay presentation is a data-only boundary; a future GUI renderer can consume `OverlaySnapshot` without coupling to interaction internals.
 - Session logging is currently in memory and IO-free; a JSONL/file sink can be added later without changing the pipeline-facing record API.
 - Acceptance automation consumes session summaries; real camera and OS acceptance still requires manual/hardware execution.
-- Runtime pipeline remains IO-free; real camera capture and real OS injection stay outside automated tests.
+- Runtime pipeline remains IO-free; `LiveRunner` owns camera IO and OS dispatch wiring.
+- Human testing should use `live --dry-run --preview --log <path>` first, then remove `--dry-run` only after preview and logs show stable hand frames, state transitions, and command emission.
 - Future face-recognition and face-attention models should plug into `IntentContext` and avoid coupling directly to `PrimitiveDetector` or `InteractionStateMachine`.
 - Refactored package layout by responsibility so future face and attention models can be added under `vision/face` and `vision/attention` without growing the hand modules.
 - Split hand interaction into `interaction/primitives.py` and `interaction/state_machine.py`.
@@ -156,6 +181,7 @@ Planned package boundaries remain:
 - OS controller auto-detection is implemented through `create_mouse_controller()`.
 - Windows auto-detection now wires a real `SendInput` sender when no sender is injected.
 - Linux auto-detection still requires an injected writer until the real `/dev/uinput` writer is implemented.
+- Live runtime is implemented through `LiveRunner` and `main.py live`.
 - The perception adapter is implemented as a testable boundary around a MediaPipe-like async detector.
 - Real MediaPipe detector construction is implemented. For MediaPipe Tasks, pass a `hand_landmarker.task` model path.
 - The current code provides the contracts, perception boundary, feature normalization, state machine, OS backend abstraction, Windows `SendInput` sender, and fixtures required for the automated MVP foundation.
@@ -217,3 +243,25 @@ Planned package boundaries remain:
 - Windows `SendInput` green step: `uv run python -m unittest discover` passed with 68 tests after adding the real sender factory and factory default wiring.
 - Review safety red step: `uv run python -m unittest tests.test_runtime_pipeline` failed when attention recovery after a drag safe-release emitted a duplicate `left_up`.
 - Review safety green step: `uv run python -m unittest tests.test_runtime_pipeline` passed with 6 tests after moving the state machine to `Cooldown` on attention-based drag release.
+- Live runtime red step: `uv run python -m unittest tests.test_main_cli tests.test_live_runner` failed with 3 expected missing `touchless_control.runtime.live` errors.
+- Live runtime green step: `uv run python -m unittest tests.test_main_cli tests.test_live_runner` passed with 5 tests after adding `LiveRunner`, `LiveRunResult`, dry-run controller dispatch, and `main.py live`.
+- MediaPipe Tasks preference red step: `uv run python -m unittest tests.test_perception tests.test_live_runner tests.test_main_cli` failed when `--model` still fell through to the legacy `solutions` path and live results lacked backend reporting.
+- MediaPipe Tasks preference green step: `uv run python -m unittest tests.test_perception tests.test_live_runner tests.test_main_cli` passed with 10 tests after preferring Tasks API for model-backed runs and adding live mode/backend output.
+- Live log suppression red step: `uv run python -m unittest tests.test_main_cli` failed because `--verbose-mediapipe` was unsupported and live did not pass log-suppression configuration.
+- Live log suppression green step: `uv run python -m unittest tests.test_main_cli` passed with 4 tests after adding default native log suppression and `--verbose-mediapipe`.
+- Async perception red step: `uv run python -m unittest tests.test_camera tests.test_live_runner` failed with missing `poll_timeout_ms` support for delayed MediaPipe callbacks.
+- Async perception green step: `uv run python -m unittest tests.test_camera tests.test_live_runner` passed with 6 tests after adding bounded poll-wait behavior to camera smoke and live runtime.
+- Camera snapshot red step: `uv run python -m unittest tests.test_camera tests.test_main_cli` failed with expected missing `CameraSnapshotRunner`/`CameraSnapshotResult` imports.
+- Camera snapshot green step: `uv run python -m unittest tests.test_camera tests.test_main_cli` passed with 10 tests after adding `camera-snapshot`.
+- Local camera snapshot verification: `uv run python main.py camera-snapshot --camera-index 0 --output C:\tmp\touchless-frame.jpg` exited 0 with `success=True frames_read=1 error_code=None`.
+- Local live dry-run verification after async poll-wait: `uv run python main.py live --dry-run --frames 60 --camera-index 0 --model C:\tmp\hand_landmarker.task` exited 0 with `success=True mode=dry_run backend=dry_run frames_read=60 hand_frames=60 commands=0 dispatches=0 failures=0 error_code=None`.
+- Live session logging red step: `uv run python -m unittest tests.test_live_runner` failed with expected missing `log_records`/`log_path` support.
+- Live session logging green step: `uv run python -m unittest tests.test_live_runner` passed with 4 tests after adding per-hand-frame `SessionLogger` records, JSONL log writing, and latency summary fields.
+- Live CLI logging red step: `uv run python -m unittest tests.test_main_cli` failed because `--log` was unsupported.
+- Live CLI logging green step: `uv run python -m unittest tests.test_main_cli tests.test_live_runner` passed with 9 tests after adding `--log`, `log_records`, `p95_latency_ms`, and `log_path` reporting.
+- Live preview red step: `uv run python -m unittest tests.test_live_runner tests.test_main_cli` failed because `LiveRunner` did not support `preview` and CLI rejected `--preview`.
+- Live preview green step: `uv run python -m unittest tests.test_main_cli tests.test_live_runner` passed with 11 tests after adding `OpenCVPreviewRenderer`, preview renderer injection, `--preview`, and `preview_frames` reporting.
+- Live observability red step: `uv run python -m unittest tests.test_live_runner tests.test_preview` failed because live JSONL omitted primitive/reason data and preview renderer did not accept `hand_frame`.
+- Live observability green step: `uv run python -m unittest tests.test_live_runner tests.test_preview` passed with 7 tests after retaining pipeline primitive/interaction events, logging them from `LiveRunner`, passing `HandFrame` to preview, and drawing landmarks.
+- Preview diagnostics red step: `uv run python -m unittest tests.test_preview tests.test_live_runner` failed because `PreviewStats` did not exist and `LiveRunner` did not pass stats to preview.
+- Preview diagnostics green step: `uv run python -m unittest tests.test_preview tests.test_live_runner` passed with 8 tests after adding `PreviewStats`, live FPS/counters, action badge, and pinch line/center rendering.

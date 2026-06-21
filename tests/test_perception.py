@@ -147,6 +147,65 @@ class MediaPipeHandPerceptionTests(unittest.TestCase):
         self.assertEqual(callbacks[1][1], "rgb-frame")
         self.assertEqual(callbacks[1][2], 123)
 
+    def test_real_mediapipe_factory_prefers_tasks_api_when_model_path_is_provided(self) -> None:
+        from types import SimpleNamespace
+
+        from touchless_control.perception import (
+            MediaPipeHandConfig,
+            create_mediapipe_detector_factory,
+        )
+
+        calls = []
+
+        class _BaseOptions:
+            def __init__(self, *, model_asset_path):
+                self.model_asset_path = model_asset_path
+
+        class _HandLandmarker:
+            @staticmethod
+            def create_from_options(options):
+                calls.append(options)
+                return SimpleNamespace(detect_async=lambda image, timestamp_ms: calls.append((image, timestamp_ms)))
+
+        class _Vision:
+            RunningMode = SimpleNamespace(LIVE_STREAM="LIVE_STREAM")
+            HandLandmarker = _HandLandmarker
+
+            class HandLandmarkerOptions:
+                def __init__(self, **kwargs):
+                    self.kwargs = kwargs
+
+        fake_mediapipe = SimpleNamespace(
+            solutions=SimpleNamespace(hands=object()),
+            Image=lambda image_format, data: ("image", image_format, data),
+            ImageFormat=SimpleNamespace(SRGB="SRGB"),
+        )
+        fake_base_options = SimpleNamespace(BaseOptions=_BaseOptions)
+
+        def module_loader(name):
+            if name == "mediapipe":
+                return fake_mediapipe
+            if name == "mediapipe.tasks.python.vision":
+                return _Vision
+            if name == "mediapipe.tasks.python.core.base_options":
+                return fake_base_options
+            raise AssertionError(name)
+
+        factory = create_mediapipe_detector_factory(
+            model_asset_path="C:/tmp/hand_landmarker.task",
+            module_loader=module_loader,
+        )
+        detector = factory(
+            config=MediaPipeHandConfig(num_hands=1),
+            result_callback=lambda _result, _image, _timestamp: None,
+        )
+
+        detector.detect_async("rgb-frame", 456)
+
+        self.assertEqual(calls[0].kwargs["base_options"].model_asset_path, "C:/tmp/hand_landmarker.task")
+        self.assertEqual(calls[0].kwargs["running_mode"], "LIVE_STREAM")
+        self.assertEqual(calls[1], (("image", "SRGB", "rgb-frame"), 456))
+
 
 if __name__ == "__main__":
     unittest.main()

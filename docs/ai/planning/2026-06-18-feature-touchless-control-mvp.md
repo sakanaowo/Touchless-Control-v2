@@ -32,6 +32,7 @@ description: Initial task breakdown for the touchless mouse-control MVP
 - [x] Task 3.4: Implement structured session logging and summary metrics.
 - [x] Task 3.5: Implement sensitivity presets and initial calibration.
 - [x] Task 3.6: Implement automated acceptance checks and threshold tuning hooks; manual hardware acceptance remains in the testing plan.
+- [x] Task 3.7: Implement live runtime CLI that connects camera, MediaPipe, feature normalization, pipeline, OS dispatch, dry-run mode, preview overlay, and JSONL session logging for human testing.
 
 ## Dependencies
 - Requirements and design docs must be reviewed before implementation starts.
