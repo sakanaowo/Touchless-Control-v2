@@ -365,6 +365,52 @@ class LiveRunnerTests(unittest.TestCase):
         self.assertEqual(backend, "dry_run")
         self.assertTrue(dry_run)
 
+    def test_live_preview_receives_runtime_pointer_diagnostics(self):
+        from types import SimpleNamespace
+
+        from tests.test_primitives import _feature
+        from touchless_control.runtime.live import LiveRunner
+
+        features = iter(
+            [
+                _feature(timestamp_ms=100, hand_velocity_norm=(0.02, 0.0)),
+                _feature(timestamp_ms=140, hand_velocity_norm=(0.02, 0.0)),
+                _feature(timestamp_ms=180, hand_velocity_norm=(0.02, 0.0)),
+            ]
+        )
+        preview = _PreviewRenderer()
+        runner = LiveRunner(
+            dry_run=True,
+            preview=True,
+            capture_factory=lambda _index: _Capture(frames=["a", "b", "c"]),
+            perception_factory=lambda _width, _height: _Perception(
+                hand_frames=["ha", "hb", "hc"]
+            ),
+            frame_converter=lambda frame: frame,
+            timestamp_ms=lambda: 100,
+            normalizer=SimpleNamespace(to_features=lambda _hand: next(features)),
+            pipeline=_Pipeline(
+                ActionCommand.move_relative(
+                    timestamp_ms=100,
+                    dx_px=2,
+                    dy_px=0,
+                    source_state="Pointing",
+                )
+            ),
+            preview_renderer=preview,
+            calibration_status="calibrated",
+        )
+
+        runner.run(max_frames=3)
+
+        stats = preview.frames[-1][-1]
+        self.assertEqual(stats.cursor_update_hz, 37.5)
+        self.assertEqual(stats.move_gap_p95_ms, 40.0)
+        self.assertEqual(stats.movement_coverage, 1.0)
+        self.assertEqual(stats.frame_drops, 0)
+        self.assertEqual(stats.stale_frames, 0)
+        self.assertEqual(stats.calibration_status, "calibrated")
+
     def test_live_runner_preview_can_stop_live_loop(self):
         from tests.test_primitives import _feature
         from touchless_control.runtime.live import LiveRunner

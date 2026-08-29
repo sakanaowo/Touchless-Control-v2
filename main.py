@@ -4,7 +4,11 @@ import argparse
 from collections.abc import Callable, Sequence
 
 from touchless_control.camera import CameraSmokeRunner, CameraSnapshotRunner
-from touchless_control.observability import SessionReport, analyze_session_log
+from touchless_control.observability import (
+    PRODUCT_ACCEPTANCE_SCENARIOS,
+    SessionReport,
+    analyze_session_log,
+)
 from touchless_control.runtime import LiveRunner
 
 
@@ -47,6 +51,8 @@ def main(
     live.add_argument("--poll-interval-ms", type=int, default=2)
     live.add_argument("--max-read-failures", type=int, default=10)
     live.add_argument("--verbose-mediapipe", action="store_true")
+    live.add_argument("--legacy-cursor", action="store_true")
+    live.add_argument("--scenario", choices=PRODUCT_ACCEPTANCE_SCENARIOS, default=None)
     live.add_argument("--log", dest="log_path", default=None)
     report = subparsers.add_parser("report")
     report.add_argument("--log", required=True)
@@ -100,7 +106,9 @@ def main(
             poll_interval_ms=args.poll_interval_ms,
             max_read_failures=args.max_read_failures,
             suppress_native_logs=not args.verbose_mediapipe,
+            legacy_cursor=args.legacy_cursor,
             log_path=args.log_path,
+            scenario_label=args.scenario,
         )
         result = runner.run(max_frames=args.frames)
         print_fn(

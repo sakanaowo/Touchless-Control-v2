@@ -10,6 +10,40 @@ from touchless_control.contracts import (
 
 
 class SessionLoggerTests(unittest.TestCase):
+    def test_records_product_acceptance_scenario_label(self) -> None:
+        from touchless_control.observability import SessionLogger
+
+        logger = SessionLogger()
+        entry = logger.record(
+            feature_frame=_feature(timestamp_ms=100),
+            scenario_label="move-slow-precise",
+        )
+
+        self.assertEqual(entry.scenario_label, "move-slow-precise")
+
+    def test_records_dispatched_cursor_deltas_for_jitter_analysis(self) -> None:
+        from touchless_control.observability import SessionLogger
+
+        logger = SessionLogger()
+        entry = logger.record(
+            feature_frame=_feature(timestamp_ms=110),
+            commands=[
+                ActionCommand.move_relative(
+                    timestamp_ms=110,
+                    dx_px=3,
+                    dy_px=-2,
+                    source_state="Pointing",
+                ),
+                ActionCommand.left_click(
+                    timestamp_ms=110,
+                    source_state="ClickCommitted",
+                ),
+            ],
+            scenario_label="move-stationary",
+        )
+
+        self.assertEqual(entry.cursor_deltas_px, ((3, -2),))
+
     def test_records_structured_feature_state_action_and_outcome_data(self) -> None:
         from touchless_control.observability import SessionLogger
 

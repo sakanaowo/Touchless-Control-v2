@@ -7,12 +7,13 @@ description: Implementation notes, changed files, and code guidelines for the to
 # Touchless Control MVP Implementation Guide
 
 ## Development Setup
-- Use the feature worktree at `C:/Code/Touchless-Control-v2/.worktrees/feature-touchless-control-mvp`.
+- Current acceptance/reconciliation work runs in the existing dirty `main` workspace because the WIP implementation is already there; the dedicated feature worktree is four commits behind and must not be merged as the source of these changes.
 - Python is run through `uv` in this environment because `python` and `py` are not directly available on PATH.
 - Camera/MediaPipe runtime uses Python 3.12 because MediaPipe is not usable with the previous Python 3.14 project setting.
 - Camera smoke command: `uv run python main.py camera-smoke --frames 30 --camera-index 0 --model C:\tmp\hand_landmarker.task`.
 - Camera snapshot command: `uv run python main.py camera-snapshot --camera-index 0 --output C:\tmp\touchless-frame.jpg`.
 - Live observable command: `uv run python main.py live --preview --frames 300 --camera-index 0 --model C:\tmp\hand_landmarker.task --log C:\tmp\touchless-session.jsonl`.
+- Scenario acceptance command: `uv run python main.py live --preview --scenario move-slow-precise --frames 300 --camera-index 0 --model C:\tmp\hand_landmarker.task --log C:\tmp\touchless-move-slow-precise.jsonl`.
 - Live OS-dispatch command: `uv run python main.py live --frames 300 --camera-index 0 --model C:\tmp\hand_landmarker.task`.
 - Live mode defaults to `--width 640 --height 480 --camera-fps 60 --preview-width 960 --preview-height 720 --preset responsive --invert-x --cursor-gain-scale 1.25 --max-read-failures 10`; use `--no-invert-x`, `--invert-y`, `--preset balanced`, explicit width/height values, or gain scaling when tuning a specific camera setup.
 - Session report command: `uv run python main.py report --log C:\tmp\touchless-session.jsonl`.
@@ -34,6 +35,9 @@ Current package layout:
 - `touchless_control/interaction/primitives.py`: primitive detector with pinch hysteresis and scroll disambiguation.
 - `touchless_control/interaction/state_machine.py`: hand interaction state machine and safety policy.
 - `touchless_control/control/cursor.py`: relative cursor mapper.
+- `touchless_control/control/pointer_config.py`: product pointer tuning for position-velocity blending, adaptive deadzone, bounds, gain, smoothing, and inversion.
+- `touchless_control/control/pointer_calibration.py`: pointer-specific neutral-zone, control-region, gain-scale, and direction-validation workflow.
+- `touchless_control/control/pointer_engine.py`: dedicated product pointer engine with position-velocity fusion, residual movement, adaptive deadzone, and virtual-trackpad bounds.
 - `touchless_control/control/queue.py`: bounded action queue and safe release tracking.
 - `touchless_control/control/os/factory.py`: OS auto-detection for mouse-controller selection.
 - `touchless_control/control/os/windows.py`: Windows mouse-controller payload adapter and `SendInput` sender.
@@ -41,9 +45,9 @@ Current package layout:
 - `touchless_control/runtime/pipeline.py`: multimodal-ready runtime pipeline that connects intent context, primitives, state machine, cursor mapping, and action queue, while retaining the latest primitive and interaction events for live logging.
 - `touchless_control/runtime/live.py`: live camera runtime runner that connects camera capture, MediaPipe perception, feature normalization, pipeline stepping, queue flushing, dry-run or OS dispatch, and optional JSONL session logging.
 - `touchless_control/presentation/overlay.py`: overlay snapshot presenter for state, tracking status, active mode, and latency warning data.
-- `touchless_control/presentation/preview.py`: OpenCV preview renderer that displays camera frames with hand landmarks, pinch line/center, action badge, live counters/FPS, runtime state, tracking, command, backend, and latency data for human validation.
-- `touchless_control/observability/logger.py`: structured session log entries and summary metrics.
-- `touchless_control/observability/report.py`: JSONL session log analyzer for latency percentiles, effective FPS, command/primitive distributions, dispatch failures, and tracking-loss count.
+- `touchless_control/presentation/preview.py`: OpenCV preview renderer that displays camera frames with hand landmarks, pinch line/center, action badge, live counters/FPS, pointer cadence/coverage, drop/stale counters, calibration status, runtime state, command, backend, and latency data for human validation.
+- `touchless_control/observability/logger.py`: structured session log entries, scenario labels, emitted cursor deltas, and summary metrics.
+- `touchless_control/observability/report.py`: JSONL session log analyzer for latency percentiles, effective FPS, command/primitive/scenario distributions, dispatch failures, and tracking-loss count.
 - `touchless_control/observability/acceptance.py`: automated acceptance summary checks and threshold tuning helpers.
 - Compatibility wrappers remain at `touchless_control.contracts`, `config`, `camera`, `perception`, `features`, `interaction`, `control`, `runtime`, `presentation`, `observability`, and `acceptance`.
 - `tests/test_contracts.py`: contract import, immutability, and baseline config tests.
@@ -57,6 +61,8 @@ Current package layout:
 - `tests/test_state_machine.py`: state transition, click, drag, tracking-loss safe release, and scrolling tests.
 - `tests/test_interaction_flows.py`: cross-component click, drag, scroll, tracking-loss, and paused-flow integration tests.
 - `tests/test_cursor_mapping.py`: deadzone, relative movement, and max-step clamp tests.
+- `tests/test_pointer_engine.py`: product pointer configuration, fusion, deadzone recovery, bounds, residual, inversion, and clamp tests.
+- `tests/test_pointer_calibration.py`: neutral-zone, control-region, gain-scale, direction-validation, config-application, and public-export tests.
 - `tests/test_mouse_controller.py`: Windows/Linux controller payload mapping and dispatch-error tests.
 - `tests/test_main_cli.py`: `camera-smoke` and `live` CLI tests.
 - `tests/test_live_runner.py`: live runner loop, dry-run controller, and dispatch integration tests.
@@ -125,6 +131,7 @@ Planned package boundaries remain:
 - Implemented `MouseController` protocol with `WindowsMouseController` and `LinuxMouseController`.
 - Windows/Linux controllers use injected sender/writer callables so unit tests never inject real OS input.
 - Windows controller maps actions to move/button/wheel payloads and can now create a real `SendInput` sender when no test sender is injected.
+- The Windows sender lazily resolves `user32.SendInput` once and reuses the configured API function for subsequent high-rate movement events instead of loading/configuring `user32` per dispatch.
 - Linux controller maps actions to uinput-style `EV_REL` and `EV_KEY` payloads; the real `/dev/uinput` writer remains a follow-up.
 - Dispatch failures are captured as `OSDispatchResult(success=False, error_code=<exception type>)`.
 - Implemented `ActionQueue` with bounded storage, stale movement coalescing, controller flush, and safe left-button release tracking.
@@ -148,14 +155,21 @@ Planned package boundaries remain:
 - `live --dry-run` runs the full camera/perception/feature/pipeline loop but dispatches through a no-op controller.
 - `live --preview` opens an OpenCV preview window that overlays observable state, tracking status, pinch/stability metrics, emitted commands, backend, and latency on the camera feed.
 - `live` without `--dry-run` uses OS auto-detection and Windows `SendInput` on Windows.
+- `live --scenario` restricts product acceptance labels to `move-slow-precise`, `move-stationary`, `move-straight`, `click-stability`, `drag-stability`, and `long-session`.
 - Live CLI output includes `mode=dry_run|dispatch` and backend name, for example `backend=dry_run` or `backend=windows_sendinput`.
 - Live CLI output includes `preview_frames` so manual testers can verify frames were rendered to the observable preview path.
 - Live CLI accepts `--log <path>` to write one JSONL session record per processed hand frame, and output reports `log_records` plus `p95_latency_ms`.
 - Live JSONL records now include latest primitive types and interaction transition reasons from the runtime pipeline.
 - Live preview passes the current `HandFrame` to the renderer so MediaPipe landmarks are drawn over the camera frame.
 - Live preview now displays live FPS/counters, highlights emitted commands with an action badge, and draws the thumb-index pinch line plus pinch center for threshold debugging.
+- Live preview diagnostics now include cursor update Hz, p95 move gap, movement coverage, camera read-drop count, stale hand-frame count, and calibration status.
+- Live preview cleanup now skips `cv2.destroyWindow()` when perception fails before the preview window is created, so the original startup error is not masked by a second OpenCV null-window error.
 - Added `report --log <path>` CLI to summarize session JSONL files after real/manual runs.
 - Session reports include total records, duration, effective FPS, action/dispatch/failure/tracking-loss counts, p95/p99 latency, primitive distribution, action distribution, cursor update Hz, movement coverage, and move-gap p95.
+- Session logs retain the selected scenario label per record, and reports aggregate scenario counts while remaining compatible with unlabeled historical JSONL.
+- Session log entries retain actual emitted cursor deltas; stationary-scenario jitter is computed as cursor-delta RMS in pixels.
+- Active movement metrics are scoped to `move-slow-precise` and `move-straight` records when scenario labels are present, including leading/trailing freezes inside the labeled run.
+- `AcceptanceEvaluator.evaluate_product_report()` fails closed for missing values and checks cursor p95 gap, movement coverage, effective FPS, stationary jitter, and maximum freeze against product thresholds.
 - Live mode suppresses noisy native MediaPipe stderr logs by default and exposes `--verbose-mediapipe` for debugging.
 - Live runs flush queued commands every processed hand frame so cursor actions do not accumulate behind camera processing.
 - Live mode waits briefly for async MediaPipe callbacks after frame submission before deciding that no hand frame is available.
@@ -169,6 +183,16 @@ Planned package boundaries remain:
 - Live preview requests OpenCV keep-ratio window behavior so the default 4:3 capture is not stretched into a 16:9 preview.
 - MediaPipe live-stream hand frames are consumed once. `LiveRunner` also skips any hand frame whose timestamp is not newer than the last processed hand timestamp so stale async outputs cannot drive repeated cursor dispatch.
 - Live camera reads now tolerate transient `VideoCapture.read()` misses and only stop after the configured consecutive failure limit. Results include `read_failures`, with `camera_read_failed` for startup read failure and `camera_read_interrupted` for mid-session interruption.
+
+### Completed Product Pointer Tasks
+- Replaced the live product path's velocity-only mapper with `PointerEngine`; `--legacy-cursor` keeps the previous mapper available for comparison and rollback during hardware tuning.
+- Added `PointerConfig.from_preset()` so existing sensitivity presets, inversion, and gain scaling feed the new engine without duplicating runtime CLI configuration.
+- Added position-velocity blending, virtual-trackpad clamping, adaptive EMA smoothing, acceleration gain, max-step clamping, and subpixel residual accumulation.
+- Adaptive deadzone now returns to its base threshold when intentional motion resumes, preventing slow movement from remaining locked out after a long stationary period.
+- Added `PointerCalibrationService` as a separate workflow so the existing pinch/drag `CalibrationService` remains backward-compatible.
+- Pointer calibration derives a median neutral center, RMS jitter deadzone, observed control-region bounds, per-user gain scale, and required X/Y inversion from labeled sample sequences.
+- `PointerConfig.from_calibration()` applies calibrated deadzone, bounds, direction, and gain while preserving the preset's smoothing and acceleration curve.
+- Current continuation work remains on `main` because Task 4.3 already existed there as uncommitted work; reconcile it with the dedicated feature worktree before commit.
 
 ### Patterns & Best Practices
 - Contracts are frozen dataclasses with slots so state-machine inputs remain immutable per frame.
@@ -291,7 +315,26 @@ Planned package boundaries remain:
 - Stale MediaPipe output green step: `uv run python -m unittest tests.test_perception tests.test_live_runner tests.test_main_cli tests.test_preview` passed with 27 tests after consuming hand frames once, skipping stale timestamps in live dispatch, defaulting preview to 960x720, and enabling `WINDOW_KEEPRATIO` where OpenCV provides it.
 - Product pointer red step: `uv run python -m unittest tests.test_cursor_mapping tests.test_report` failed because small repeated hand motion below the preset deadzone emitted no movement and session reports did not expose cursor cadence metrics.
 - Product pointer green step: `uv run python -m unittest tests.test_cursor_mapping tests.test_report tests.test_main_cli` passed with 16 tests after adding cursor residual/subpixel accumulation and report metrics for cursor update Hz, movement coverage, and move gaps.
+- Task 4.3 adaptive-deadzone red step: `uv run python -m unittest tests.test_pointer_engine.PointerEngineTests.test_sustained_slow_motion_escapes_deadzone_after_stillness` failed because all sustained slow-motion commands remained `none` after stillness.
+- Task 4.3 adaptive-deadzone green step: the same focused command passed after shrinking the active deadzone back to the base threshold when intentional motion resumes.
+- Task 4.3 consumer regression: `uv run python -m unittest tests.test_pointer_engine tests.test_runtime_pipeline tests.test_live_runner` passed 29 tests.
+- Task 4.4 red steps independently failed for the missing pointer-calibration module, direction-sample arguments, `PointerConfig.from_calibration()`, and package exports before each production slice was added.
+- Task 4.4 green regression: `uv run python -m unittest tests.test_calibration tests.test_pointer_calibration tests.test_pointer_engine tests.test_live_runner tests.test_main_cli` passed 36 tests.
+- Task 4.5 logger red step failed because `SessionLogger.record()` did not accept `scenario_label`; the green logger/acceptance regression passed 9 tests after adding the optional field.
+- Task 4.5 CLI red step failed because `live --scenario` was unrecognized; the green CLI/logger/live regression passed 14 tests after wiring the validated label through `LiveRunner`.
+- Task 4.5 report red step failed because `SessionReport` had no `scenario_counts`; the green logger/live/CLI/report regression passed 25 tests after aggregating labeled records.
+- Task 4.6 cursor-delta red step failed because log entries had no `cursor_deltas_px`; the green logger/live regression passed 14 tests after recording actual movement payloads.
+- Task 4.6 metric red steps failed because stationary jitter ignored scenario cursor deltas, movement coverage included stationary frames, and CLI output omitted jitter/freeze; the final report/acceptance/CLI regression passed 20 tests.
+- Task 4.7 preview red step failed because `PreviewStats` had no pointer diagnostic fields; the renderer test passed after adding the fields and overlay text.
+- Task 4.7 runtime red step failed because `LiveRunner` had no calibration status or runtime metric propagation; `uv run python -m unittest tests.test_live_runner tests.test_preview tests.test_main_cli` passed 23 tests after wiring live counters into preview stats.
+- Task 4.8 high-rate red step failed because `create_sendinput_sender()` had no reusable API factory; `uv run python -m unittest tests.test_mouse_controller` passed 11 tests after adding lazy one-time API resolution and a 120-event burst test.
+- Preview cleanup regression red step called `destroyWindow()` before the first render; the focused test and 24 preview/live/CLI regressions passed after guarding cleanup with `_window_ready`. Removing the guard made the focused regression fail again, and restoring it returned the test to green.
+- Manual model verification downloaded the official MediaPipe Hand Landmarker float16 task to temporary storage with SHA-256 `fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1`; `camera-smoke` read 30 frames and initialized MediaPipe successfully.
+- Manual preview dry-run rendered 900 frames without camera read failures or cleanup errors, but the only available camera showed a dark surface and produced zero hand/log records, so movement E2E acceptance remains open.
+- Real Windows normal-integrity `SendInput` validation moved the cursor from `(400,300)` to `(422,300)` against a dedicated Tkinter target.
+- After camera repositioning, a short `move-straight` run processed 220/222 hand frames with 36 successful dry-run dispatches and p95 latency 10 ms, but failed cadence/coverage/freeze thresholds. A second 900-frame attempt reached effective FPS 30.78 for the detected segment but retained only 74 hand frames and also failed the product gates.
+- Windows integrity testing confirmed normal-to-elevated blocking with the elevated target foreground. The elevated injector found and foregrounded the same target and set the cursor baseline, but `SendInput` returned zero with `last_error=87`; Task 4.8 remains open for root-cause analysis.
 
 ## Product Readiness Notes
 - The MVP foundation is not yet an acceptable end-user product. Current manual log analysis showed low pipeline latency but unacceptable cursor cadence: `cursor_update_hz=5.05`, `movement_coverage=0.33`, and `move_gap_p95_ms=516.0`.
-- The residual cursor mapper is a first corrective slice. A full product pointer engine still needs position+velocity fusion, adaptive jitter-aware deadzone, control-region calibration, and scenario-labeled acceptance gates.
+- The dedicated product pointer engine now covers position+velocity fusion, residual accumulation, adaptive jitter-aware deadzone, and virtual-trackpad bounds. Product readiness still requires control-region calibration, scenario-labeled logs, hardware acceptance gates, runtime diagnostics, and Windows dispatch validation.

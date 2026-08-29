@@ -171,6 +171,30 @@ class MainCliTests(unittest.TestCase):
 
         self.assertFalse(captured_kwargs["suppress_native_logs"])
 
+    def test_live_command_forwards_product_acceptance_scenario(self) -> None:
+        from main import main
+
+        captured_kwargs = {}
+        runner = _LiveRunner(
+            LiveRunResult(
+                success=True,
+                frames_read=1,
+                hand_frames=0,
+                commands_emitted=0,
+                dispatches=0,
+                failures=0,
+            )
+        )
+
+        exit_code = main(
+            ["live", "--frames", "1", "--scenario", "move-slow-precise"],
+            live_runner_factory=lambda **kwargs: captured_kwargs.update(kwargs) or runner,
+            print_fn=lambda _message: None,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(captured_kwargs["scenario_label"], "move-slow-precise")
+
     def test_live_command_exposes_window_tuning_flags(self) -> None:
         from main import main
 

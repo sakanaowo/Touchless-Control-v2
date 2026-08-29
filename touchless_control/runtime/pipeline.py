@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 from touchless_control.control.cursor import CursorMapper
 from touchless_control.control.os.base import MouseController
+from touchless_control.control.pointer_engine import PointerEngine
 from touchless_control.control.queue import ActionQueue
 from touchless_control.core.contracts import (
     ActionCommand,
@@ -23,6 +24,7 @@ class TouchlessPipeline:
     machine: InteractionStateMachine = field(default_factory=InteractionStateMachine)
     mapper: CursorMapper = field(default_factory=CursorMapper)
     queue: ActionQueue = field(default_factory=ActionQueue)
+    pointer_engine: PointerEngine | None = None
     last_primitive_events: tuple[PrimitiveEvent, ...] = ()
     last_interaction_events: tuple[InteractionEvent, ...] = ()
 
@@ -54,8 +56,7 @@ class TouchlessPipeline:
         commands = [output for output in outputs if isinstance(output, ActionCommand)]
 
         if self.machine.state in {"Pointing", "Dragging"}:
-            self.mapper.source_state = self.machine.state
-            commands.append(self.mapper.map_motion(feature_frame))
+            commands.append(self._map_motion(feature_frame))
 
         enqueued = []
         for command in commands:
@@ -67,6 +68,14 @@ class TouchlessPipeline:
 
     def flush(self, controller: MouseController) -> list[OSDispatchResult]:
         return self.queue.flush(controller)
+
+    def _map_motion(self, feature_frame: FeatureFrame) -> ActionCommand:
+        """Map hand motion using PointerEngine if available, else CursorMapper."""
+        if self.pointer_engine is not None:
+            self.pointer_engine.source_state = self.machine.state
+            return self.pointer_engine.map_motion(feature_frame)
+        self.mapper.source_state = self.machine.state
+        return self.mapper.map_motion(feature_frame)
 
     def _handle_attention_block(self, context: IntentContext) -> tuple[ActionCommand, ...]:
         if self.machine.state != "Dragging":

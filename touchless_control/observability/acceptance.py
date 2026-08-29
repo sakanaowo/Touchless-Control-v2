@@ -11,6 +11,12 @@ class AcceptanceCriteria:
     p95_latency_ms: float = 80.0
     max_false_clicks_per_minute: float = 0.5
     max_false_drags_per_100_clicks: int = 2
+    # Product-grade pointer control thresholds
+    cursor_update_p95_gap_ms: float = 50.0
+    movement_coverage_min: float = 0.80
+    effective_tracking_fps_min: float = 30.0
+    stationary_jitter_rms_px_max: float = 6.0
+    max_cursor_freeze_ms: float = 150.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +45,60 @@ class AcceptanceEvaluator:
                 passed=summary.failure_count == 0,
                 actual=float(summary.failure_count),
                 threshold=0.0,
+            ),
+        )
+
+    def evaluate_product_report(
+        self,
+        report: object,
+    ) -> tuple[AcceptanceCheck, ...]:
+        """Evaluate a SessionReport against product-grade acceptance criteria.
+
+        Accepts any object with the expected attributes so the import
+        dependency on ``SessionReport`` remains optional at the module level.
+        """
+        move_gap_p95 = getattr(report, "move_gap_p95_ms", None)
+        if move_gap_p95 is None:
+            move_gap_p95 = float("inf")
+        movement_coverage = getattr(report, "movement_coverage", 0.0)
+        effective_fps = getattr(report, "effective_fps", 0.0)
+        jitter_rms = getattr(report, "stationary_jitter_rms_px", None)
+        if jitter_rms is None:
+            jitter_rms = float("inf")
+        max_freeze = getattr(report, "max_cursor_freeze_ms", None)
+        if max_freeze is None:
+            max_freeze = float("inf")
+
+        return (
+            AcceptanceCheck(
+                name="cursor_update_p95_gap_ms",
+                passed=move_gap_p95 <= self.criteria.cursor_update_p95_gap_ms,
+                actual=float(move_gap_p95),
+                threshold=self.criteria.cursor_update_p95_gap_ms,
+            ),
+            AcceptanceCheck(
+                name="movement_coverage",
+                passed=movement_coverage >= self.criteria.movement_coverage_min,
+                actual=float(movement_coverage),
+                threshold=self.criteria.movement_coverage_min,
+            ),
+            AcceptanceCheck(
+                name="effective_tracking_fps",
+                passed=effective_fps >= self.criteria.effective_tracking_fps_min,
+                actual=float(effective_fps),
+                threshold=self.criteria.effective_tracking_fps_min,
+            ),
+            AcceptanceCheck(
+                name="stationary_jitter_rms_px",
+                passed=jitter_rms <= self.criteria.stationary_jitter_rms_px_max,
+                actual=float(jitter_rms),
+                threshold=self.criteria.stationary_jitter_rms_px_max,
+            ),
+            AcceptanceCheck(
+                name="max_cursor_freeze_ms",
+                passed=max_freeze <= self.criteria.max_cursor_freeze_ms,
+                actual=float(max_freeze),
+                threshold=self.criteria.max_cursor_freeze_ms,
             ),
         )
 

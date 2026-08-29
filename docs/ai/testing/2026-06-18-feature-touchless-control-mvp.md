@@ -29,6 +29,10 @@ description: Acceptance and coverage plan for the touchless mouse-control MVP
 - [x] Looks up named presets deterministically.
 - [x] Derives palm-scale baseline, jitter, pinch thresholds, and click/drag guards from calibration samples.
 - [x] Converts calibration results into a tuned preset without mutating the source preset.
+- [x] Derives pointer neutral center, jitter-aware deadzone, and validated control-region bounds from labeled samples.
+- [x] Derives per-user pointer gain scaling from the usable control span.
+- [x] Validates horizontal/vertical direction samples and records required axis inversion.
+- [x] Applies the pointer calibration profile to `PointerConfig` without changing the legacy gesture calibration API.
 
 ### Perception Adapter
 - [x] MediaPipe hand adapter uses one-hand `LIVE_STREAM` configuration.
@@ -60,13 +64,16 @@ description: Acceptance and coverage plan for the touchless mouse-control MVP
 - [x] Live runner configures camera width, height, FPS, and buffer size through the capture boundary when supported.
 - [x] Live dry-run mode avoids creating the real OS controller and dispatches through a no-op controller.
 - [x] Live runner records one structured session log entry per processed hand frame and can write JSONL for manual metric regression.
+- [x] `live --scenario` accepts the six product-acceptance scenario labels and writes the selected label into every processed hand-frame record.
 - [x] Live preview renders camera frames with state, tracking status, pinch/stability metrics, commands, backend, and latency through an injectable renderer.
 - [x] Live preview draws MediaPipe hand landmarks over the camera frame when a hand frame is available.
 - [x] Live preview draws landmarks using actual frame dimensions so keypoints stay aligned when camera output differs from requested dimensions.
 - [x] Live preview opens a resizable OpenCV window and applies initial preview dimensions.
 - [x] Live preview requests keep-ratio behavior for resizable OpenCV windows when the backend supports it.
 - [x] Live preview displays FPS, frame/hand/command/dispatch/failure counters, action badge, and thumb-index pinch line/center.
+- [x] Live preview displays cursor update Hz, move-gap p95, movement coverage, camera read-drop count, stale hand-frame count, and calibration status.
 - [x] Live preview can stop the live loop when the tester presses the preview quit key.
+- [x] Live preview cleanup is a no-op when perception initialization fails before the OpenCV window is created, preserving the original startup error.
 
 ### Feature Normalization
 - [x] Computes palm scale consistently from landmark fixtures.
@@ -95,6 +102,9 @@ description: Acceptance and coverage plan for the touchless mouse-control MVP
 - [x] Supports configurable X/Y inversion for camera orientation fixes.
 - [x] Supports configurable gain scaling for live responsiveness tuning.
 - [x] Accumulates residual/subpixel movement so small intentional motion can emit cursor updates instead of being fully dropped by deadzone.
+- [x] Dedicated pointer engine blends bounded position deltas with velocity and remains relative-only.
+- [x] Adaptive deadzone absorbs jitter during stillness and shrinks when intentional slow motion resumes.
+- [x] Virtual-trackpad bounds limit position contribution without disabling velocity-driven movement.
 - [x] Emits relative movement, never absolute cursor targets.
 
 ### OS Controller
@@ -105,6 +115,10 @@ description: Acceptance and coverage plan for the touchless mouse-control MVP
 - [x] Converts action commands to Linux/uinput-style payloads through an injected writer.
 - [x] Reports dispatch success, backend name, error code, and latency.
 - [x] Handles backend failures without crashing the interaction loop.
+- [x] Reuses one lazily initialized Windows `SendInput` API boundary across a 120-event high-rate movement burst.
+- [x] Real Windows `SendInput` movement succeeds against a dedicated normal-integrity target; relative input moved the cursor from `(400,300)` to `(422,300)` with system pointer acceleration enabled.
+- [ ] Real Windows `SendInput` behavior is verified with an elevated target in foreground and an elevated injector.
+- Elevated matrix evidence: normal-to-elevated input was blocked at `SetCursorPos` as expected; elevated-to-elevated reached the foreground target but `SendInput` returned zero with `last_error=87`.
 
 ### Action Queue
 - [x] Ignores `none` commands.
@@ -118,17 +132,24 @@ description: Acceptance and coverage plan for the touchless mouse-control MVP
 - [x] Reports stable, no-hand, and tracking-lost status.
 - [x] Raises a latency warning when latency exceeds the 80 ms MVP budget.
 - [x] Carries stability and pinch metrics needed by a renderer/debug view.
+- [x] Carries product pointer cadence, coverage, drop/stale, and calibration diagnostics from the live runtime.
 
 ### Observability
 - [x] Records timestamp, state, primitive types, transition reasons, action types, dispatch outcomes, latency, and key feature values.
+- [x] Records an optional product-acceptance scenario label without breaking unlabeled legacy logs.
 - [x] Summarizes action count, dispatch count, failure count, tracking-loss count, average latency, and p95 latency.
 - [x] `report --log` analyzes JSONL sessions and reports effective FPS, p95/p99 latency, action/dispatch/failure/tracking-loss counts, primitive distribution, action distribution, cursor update Hz, movement coverage, and move-gap p95.
+- [x] Session reports aggregate record counts by scenario label.
+- [x] Session logs record emitted cursor deltas so stationary jitter is measured in pixels instead of inferred from hand velocity.
+- [x] Active movement coverage, cursor cadence, move gaps, and freeze duration use only labeled movement-scenario frames; unlabeled historical logs retain legacy aggregation.
 
 ### Acceptance Automation
 - [x] Evaluates p95 latency against the 80 ms MVP budget from session summaries.
 - [x] Flags dispatch failures from session summaries.
 - [x] Recommends stricter pinch/click thresholds when false clicks exceed budget.
 - [x] Recommends safer drag thresholds when false drags exceed budget.
+- [x] Evaluates active cursor p95 gap <= 50 ms, movement coverage >= 80%, effective tracking FPS >= 30, stationary jitter <= 6 px RMS, and max cursor freeze <= 150 ms.
+- [x] Missing product metric fields fail closed instead of being treated as passing values.
 
 ## Integration Tests
 - [x] `FeatureFrame` fixture -> primitive events -> click action command.
@@ -168,6 +189,7 @@ description: Acceptance and coverage plan for the touchless mouse-control MVP
 - Live dry-run no-op controller for human tests before enabling OS input.
 - OpenCV preview window for observing camera framing, hand landmarks, pinch line/center, hand-tracking state, command emission, FPS/counters, backend, and latency during manual validation.
 - JSONL session logs from `live --log` for manual metric regression.
+- Scenario-labeled JSONL logs from `live --scenario <label> --log <path>` for product acceptance gates.
 - `report --log` output for manual run summaries before formal E2E acceptance sign-off.
 - Automated acceptance checks over synthetic/in-memory session summaries.
 - Runtime pipeline tests over synthetic `FeatureFrame` sequences.
@@ -175,7 +197,7 @@ description: Acceptance and coverage plan for the touchless mouse-control MVP
 
 ## Test Reporting & Coverage
 - Report p50/p95/p99 latency, FPS, cursor update Hz, move-gap p50/p95/max, movement coverage, action success rate, false positives per minute, recovery time, tracking-loss rate, jitter, and log completeness.
-- Current report automation covers effective FPS, p95/p99 latency, action/primitive distributions, dispatch failures, tracking-loss count, cursor update Hz, movement coverage, and move-gap p95; success-rate, jitter, freeze, and false-positive classification still need scenario labels from manual protocols.
+- Current report automation covers effective FPS, p95/p99 latency, action/primitive/scenario distributions, dispatch failures, tracking-loss count, cursor update Hz, movement coverage, move-gap p95, stationary cursor-delta jitter, and max freeze. Success-rate and false-positive classification still need completed manual protocols.
 - Coverage target: 100% of new state-machine and safety policy branches; documented exceptions only for hardware-only paths.
 - Current automated command: `uv run python -m unittest discover`.
 
@@ -184,10 +206,16 @@ description: Acceptance and coverage plan for the touchless mouse-control MVP
 - If `hand_frames=0`, capture `camera-snapshot` and inspect the saved frame for wrong camera source, dark image, blur, or framing problems.
 - Validate `live --preview --log C:\tmp\touchless-session.jsonl` with a hand visible until the preview shows landmarks, pinch line, counters, and `Pointing`, then move/pinch/scroll until action badge/`commands > 0`, `log_records > 0`, and the overlay state changes are visible.
 - If cursor direction is still wrong for a specific camera, retest with `--no-invert-x` or `--invert-y`.
-- Latest local dry-run reached `hand_frames=60` and `commands=0`; next manual step is moving/pinching/scrolling a visible hand in frame until commands are emitted.
+- A historical local dry-run reached `hand_frames=60` and `commands=0`; the next successful hand-visible run still needs movement/pinch/scroll input until commands are emitted.
+- Current model-backed dry-run rendered 900/900 preview frames without a cleanup crash but recorded `hand_frames=0` and `log_records=0`; camera index 0 was pointed at a dark surface and indexes 1-3 could not open.
+- After camera repositioning, a short `move-straight` run recorded 220/222 hand frames, 36 dispatches, zero failures, and p95 latency 10 ms. It still failed product gates with 15% movement coverage, 4.34 cursor Hz, 1621 ms p95 move gap, and 2352 ms max freeze.
+- A second 900-frame run recorded only 74 hand frames; effective FPS reached 30.78 but coverage was 30%, cursor Hz 9.15, p95 move gap 314 ms, and max freeze 344 ms, so `TP-MOVE-STRAIGHT` remains unchecked.
 - Validate overlay state transitions.
 - Validate calibration flow with at least two users or repeated sessions.
+- Capture neutral, control-region, horizontal, and vertical sample sets before applying a pointer calibration profile; reject incomplete direction axes or insufficient travel.
 - Validate Windows `SendInput` behavior against normal and elevated target windows.
+- Normal-integrity Windows target validation passed with a dedicated Tkinter window and one rightward movement event. With unrelated applications removed from foreground, normal-to-elevated blocking behaved as expected, but elevated-to-elevated dispatch failed with `last_error=87`; investigate before repeating real elevated injection.
+- Automated burst coverage does not prove Windows UIPI/elevation behavior; keep `TP-CROSS-OS` open until both target integrity levels are exercised manually.
 - Validate Linux virtual device permissions and fallback errors.
 
 ## Performance Testing

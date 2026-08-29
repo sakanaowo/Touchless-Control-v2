@@ -3,7 +3,12 @@ from touchless_control.observability.acceptance import (
     AcceptanceCriteria,
     AcceptanceEvaluator,
 )
-from touchless_control.observability.logger import SessionLogger, SessionLogEntry, SessionSummary
+from touchless_control.observability.logger import (
+    PRODUCT_ACCEPTANCE_SCENARIOS,
+    SessionLogger,
+    SessionLogEntry,
+    SessionSummary,
+)
 from touchless_control.observability.report import (
     SessionReport,
     analyze_session_entries,
@@ -14,6 +19,7 @@ __all__ = [
     "AcceptanceCheck",
     "AcceptanceCriteria",
     "AcceptanceEvaluator",
+    "PRODUCT_ACCEPTANCE_SCENARIOS",
     "SessionLogger",
     "SessionLogEntry",
     "SessionReport",

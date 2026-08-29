@@ -12,6 +12,15 @@ from touchless_control.core.contracts import (
     PrimitiveEvent,
 )
 
+PRODUCT_ACCEPTANCE_SCENARIOS = (
+    "move-slow-precise",
+    "move-stationary",
+    "move-straight",
+    "click-stability",
+    "drag-stability",
+    "long-session",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class SessionLogEntry:
@@ -24,6 +33,8 @@ class SessionLogEntry:
     dispatch_error_codes: tuple[str | None, ...]
     latency_ms: float | None
     features: dict[str, Any]
+    scenario_label: str | None = None
+    cursor_deltas_px: tuple[tuple[int, int], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +65,7 @@ class SessionLogger:
         commands: Sequence[ActionCommand] = (),
         results: Sequence[OSDispatchResult] = (),
         latency_ms: float | None = None,
+        scenario_label: str | None = None,
     ) -> SessionLogEntry:
         entry = SessionLogEntry(
             timestamp_ms=feature_frame.timestamp_ms,
@@ -65,6 +77,14 @@ class SessionLogger:
             dispatch_error_codes=tuple(result.error_code for result in results),
             latency_ms=latency_ms,
             features=_feature_payload(feature_frame),
+            scenario_label=scenario_label,
+            cursor_deltas_px=tuple(
+                (command.dx_px, command.dy_px)
+                for command in commands
+                if command.type == "move_relative"
+                and command.dx_px is not None
+                and command.dy_px is not None
+            ),
         )
         self._entries.append(entry)
         return entry

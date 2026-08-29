@@ -116,6 +116,27 @@ class MouseControllerTests(unittest.TestCase):
         with self.assertRaises(OSError):
             sender({"kind": "button", "button": "left", "pressed": True})
 
+    def test_sendinput_sender_reuses_windows_api_for_high_rate_move_burst(self) -> None:
+        from touchless_control.control.os.windows import create_sendinput_sender
+
+        factory_calls = []
+        api_calls = []
+
+        def fake_api(count, input_pointer, input_size):
+            api_calls.append((count, input_pointer, input_size))
+            return count
+
+        def fake_factory():
+            factory_calls.append(True)
+            return fake_api
+
+        sender = create_sendinput_sender(send_input_factory=fake_factory)
+        for _index in range(120):
+            sender({"kind": "move", "dx": 2, "dy": -1})
+
+        self.assertEqual(len(factory_calls), 1)
+        self.assertEqual(len(api_calls), 120)
+
     def test_factory_auto_detects_linux_controller(self) -> None:
         from touchless_control.control import LinuxMouseController, create_mouse_controller
 

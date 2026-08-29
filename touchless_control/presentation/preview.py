@@ -15,6 +15,12 @@ class PreviewStats:
     dispatches: int
     failures: int
     fps: float
+    cursor_update_hz: float = 0.0
+    move_gap_p95_ms: float | None = None
+    movement_coverage: float = 0.0
+    frame_drops: int = 0
+    stale_frames: int = 0
+    calibration_status: str = "uncalibrated"
 
 
 @dataclass(slots=True)
@@ -86,6 +92,8 @@ class OpenCVPreviewRenderer:
         return key in {ord("q"), 27}
 
     def close(self) -> None:
+        if not self._window_ready:
+            return
         try:
             import cv2
         except ImportError:
@@ -184,9 +192,13 @@ def _display_dimensions(display: object, hand_frame: HandFrame) -> tuple[int, in
 def _stats_line(stats: PreviewStats | None) -> str | None:
     if stats is None:
         return None
+    gap_p95 = "-" if stats.move_gap_p95_ms is None else f"{stats.move_gap_p95_ms:.1f}ms"
     return (
         f"fps={stats.fps:.1f} frames={stats.frames_read} hands={stats.hand_frames} "
-        f"commands={stats.commands_emitted} dispatches={stats.dispatches} failures={stats.failures}"
+        f"commands={stats.commands_emitted} dispatches={stats.dispatches} failures={stats.failures} "
+        f"cursor_hz={stats.cursor_update_hz:.1f} gap_p95={gap_p95} "
+        f"coverage={stats.movement_coverage:.0%} drops={stats.frame_drops} "
+        f"stale={stats.stale_frames} calibration={stats.calibration_status}"
     )
 
 

@@ -18,6 +18,25 @@ class _ShapedFrame:
 
 
 class PreviewRendererTests(unittest.TestCase):
+    def test_opencv_preview_close_before_render_does_not_destroy_missing_window(self) -> None:
+        from touchless_control.presentation.preview import OpenCVPreviewRenderer
+
+        calls = []
+        fake_cv2 = SimpleNamespace(
+            destroyWindow=lambda *args: calls.append(("destroyWindow", args)),
+        )
+        original_cv2 = sys.modules.get("cv2")
+        sys.modules["cv2"] = fake_cv2
+        try:
+            OpenCVPreviewRenderer().close()
+        finally:
+            if original_cv2 is None:
+                sys.modules.pop("cv2", None)
+            else:
+                sys.modules["cv2"] = original_cv2
+
+        self.assertEqual(calls, [])
+
     def test_opencv_preview_draws_hand_landmarks_when_hand_frame_is_available(self) -> None:
         from touchless_control.presentation.preview import OpenCVPreviewRenderer
 
@@ -215,6 +234,12 @@ class PreviewRendererTests(unittest.TestCase):
                     dispatches=8,
                     failures=0,
                     fps=28.5,
+                    cursor_update_hz=24.0,
+                    move_gap_p95_ms=45.0,
+                    movement_coverage=0.82,
+                    frame_drops=2,
+                    stale_frames=3,
+                    calibration_status="calibrated",
                 ),
             )
         finally:
@@ -229,6 +254,12 @@ class PreviewRendererTests(unittest.TestCase):
         self.assertIn("fps=28.5", rendered_text)
         self.assertIn("frames=30", rendered_text)
         self.assertIn("hands=29", rendered_text)
+        self.assertIn("cursor_hz=24.0", rendered_text)
+        self.assertIn("gap_p95=45.0ms", rendered_text)
+        self.assertIn("coverage=82%", rendered_text)
+        self.assertIn("drops=2", rendered_text)
+        self.assertIn("stale=3", rendered_text)
+        self.assertIn("calibration=calibrated", rendered_text)
         self.assertIn("ACTION left_click", rendered_text)
         self.assertTrue(any(name == "rectangle" for name, _args in calls))
         self.assertTrue(

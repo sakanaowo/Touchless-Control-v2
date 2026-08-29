@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 from dataclasses import asdict, dataclass, field
 from os import environ
@@ -10,6 +11,8 @@ from typing import Any, Callable, Protocol, Sequence
 from touchless_control.control.os.base import MouseController
 from touchless_control.control.os.factory import create_mouse_controller
 from touchless_control.control.cursor import CursorMapper
+from touchless_control.control.pointer_config import PointerConfig
+from touchless_control.control.pointer_engine import PointerEngine
 from touchless_control.core.config import SensitivityPreset
 from touchless_control.core.contracts import ActionCommand, OSDispatchResult
 from touchless_control.interaction import InteractionStateMachine, PrimitiveDetector
@@ -100,6 +103,7 @@ class LiveRunner:
     invert_x: bool = True
     invert_y: bool = False
     cursor_gain_scale: float = 1.25
+    legacy_cursor: bool = False
     max_read_failures: int = 10
     suppress_native_logs: bool = True
     capture_factory: CaptureFactory = _default_capture_factory
@@ -114,6 +118,8 @@ class LiveRunner:
     controller_factory: ControllerFactory = create_mouse_controller
     logger: SessionLogger = field(default_factory=SessionLogger)
     log_path: str | None = None
+    scenario_label: str | None = None
+    calibration_status: str = "uncalibrated"
     log_writer: LogWriter = _default_log_writer
     overlay: OverlayPresenter = field(default_factory=OverlayPresenter)
     preview_renderer: PreviewRenderer | None = None
@@ -150,11 +156,16 @@ class LiveRunner:
         started_at_ms: int | None = None
         terminal_error_code: str | None = None
         last_hand_timestamp_ms: int | None = None
+        first_hand_timestamp_ms: int | None = None
+        stale_hand_frames = 0
+        movement_frame_count = 0
+        move_timestamps: list[int] = []
         pipeline = self.pipeline or _create_pipeline(
             preset_name=self.preset_name,
             invert_x=self.invert_x,
             invert_y=self.invert_y,
             gain_scale=self.cursor_gain_scale,
+            legacy_cursor=self.legacy_cursor,
         )
         try:
             perception_factory = self.perception_factory or self._create_default_perception
@@ -201,6 +212,12 @@ class LiveRunner:
                                     failures=failures,
                                     started_at_ms=started_at_ms,
                                     now_ms=timestamp_ms,
+                                    move_timestamps=move_timestamps,
+                                    movement_frame_count=movement_frame_count,
+                                    frame_drops=read_failures,
+                                    stale_frames=stale_hand_frames,
+                                    calibration_status=self.calibration_status,
+                                    first_hand_timestamp_ms=first_hand_timestamp_ms,
                                 ),
                         )
                         continue
@@ -213,6 +230,7 @@ class LiveRunner:
                         last_hand_timestamp_ms is not None
                         and hand_timestamp_ms <= last_hand_timestamp_ms
                     ):
+                        stale_hand_frames += 1
                         if preview_renderer is not None:
                             preview_frames += 1
                             stop_requested = preview_renderer.render(
@@ -231,13 +249,24 @@ class LiveRunner:
                                     failures=failures,
                                     started_at_ms=started_at_ms,
                                     now_ms=timestamp_ms,
+                                    move_timestamps=move_timestamps,
+                                    movement_frame_count=movement_frame_count,
+                                    frame_drops=read_failures,
+                                    stale_frames=stale_hand_frames,
+                                    calibration_status=self.calibration_status,
+                                    first_hand_timestamp_ms=first_hand_timestamp_ms,
                                 ),
                             )
                         continue
 
                     last_hand_timestamp_ms = hand_timestamp_ms
                     hand_frames += 1
+                    if first_hand_timestamp_ms is None:
+                        first_hand_timestamp_ms = feature_frame.timestamp_ms
                     commands = pipeline.step(feature_frame)
+                    if any(command.type == "move_relative" for command in commands):
+                        movement_frame_count += 1
+                        move_timestamps.append(feature_frame.timestamp_ms)
                     commands_emitted += len(commands)
                     results = pipeline.flush(controller)
                     dispatches += len(results)
@@ -254,6 +283,7 @@ class LiveRunner:
                         commands=commands,
                         results=results,
                         latency_ms=latency_ms,
+                        scenario_label=self.scenario_label,
                     )
                     if preview_renderer is not None:
                         snapshot = self.overlay.snapshot(
@@ -278,6 +308,12 @@ class LiveRunner:
                                 failures=failures,
                                 started_at_ms=started_at_ms,
                                 now_ms=feature_frame.timestamp_ms,
+                                move_timestamps=move_timestamps,
+                                movement_frame_count=movement_frame_count,
+                                frame_drops=read_failures,
+                                stale_frames=stale_hand_frames,
+                                calibration_status=self.calibration_status,
+                                first_hand_timestamp_ms=first_hand_timestamp_ms,
                             ),
                         )
         except KeyboardInterrupt:
@@ -402,17 +438,30 @@ def _create_pipeline(
     invert_x: bool,
     invert_y: bool,
     gain_scale: float,
+    legacy_cursor: bool = False,
 ) -> TouchlessPipeline:
     preset = SensitivityPreset.named(preset_name)
+    if legacy_cursor:
+        return TouchlessPipeline(
+            detector=PrimitiveDetector(preset=preset),
+            machine=InteractionStateMachine(preset=preset),
+            mapper=CursorMapper(
+                preset=preset,
+                invert_x=invert_x,
+                invert_y=invert_y,
+                gain_scale=gain_scale,
+            ),
+        )
+    config = PointerConfig.from_preset(
+        preset,
+        invert_x=invert_x,
+        invert_y=invert_y,
+        gain_scale=gain_scale,
+    )
     return TouchlessPipeline(
         detector=PrimitiveDetector(preset=preset),
         machine=InteractionStateMachine(preset=preset),
-        mapper=CursorMapper(
-            preset=preset,
-            invert_x=invert_x,
-            invert_y=invert_y,
-            gain_scale=gain_scale,
-        ),
+        pointer_engine=PointerEngine(config=config),
     )
 
 
@@ -442,8 +491,19 @@ def _preview_stats(
     failures: int,
     started_at_ms: int | None,
     now_ms: int,
+    move_timestamps: Sequence[int] = (),
+    movement_frame_count: int = 0,
+    frame_drops: int = 0,
+    stale_frames: int = 0,
+    calibration_status: str = "uncalibrated",
+    first_hand_timestamp_ms: int | None = None,
 ) -> PreviewStats:
     elapsed_ms = max(1, now_ms - (started_at_ms or now_ms))
+    pointer_elapsed_ms = max(1, now_ms - (first_hand_timestamp_ms or now_ms))
+    move_gaps = [
+        float(current - previous)
+        for previous, current in zip(move_timestamps, move_timestamps[1:])
+    ]
     return PreviewStats(
         frames_read=frames_read,
         hand_frames=hand_frames,
@@ -451,4 +511,20 @@ def _preview_stats(
         dispatches=dispatches,
         failures=failures,
         fps=(frames_read * 1000.0) / elapsed_ms,
+        cursor_update_hz=(len(move_timestamps) * 1000.0) / pointer_elapsed_ms,
+        move_gap_p95_ms=_runtime_percentile(move_gaps, 0.95),
+        movement_coverage=(
+            movement_frame_count / hand_frames if hand_frames > 0 else 0.0
+        ),
+        frame_drops=frame_drops,
+        stale_frames=stale_frames,
+        calibration_status=calibration_status,
     )
+
+
+def _runtime_percentile(values: Sequence[float], percentile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = max(0, math.ceil(percentile * len(ordered)) - 1)
+    return ordered[index]

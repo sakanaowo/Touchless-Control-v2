@@ -42,12 +42,12 @@ description: Initial task breakdown for the touchless mouse-control MVP
 ### Phase 4: Product-Grade Pointer Control
 - [x] Task 4.1: Add product acceptance metrics for cursor update cadence, movement coverage, and move gaps to the session report.
 - [x] Task 4.2: Add residual/subpixel accumulation in cursor mapping so small intentional hand motion is not dropped by the deadzone.
-- [ ] Task 4.3: Replace velocity-only mapping with a dedicated pointer engine that combines position, velocity, residual movement, adaptive deadzone, and virtual-trackpad bounds.
-- [ ] Task 4.4: Add calibration workflow for neutral zone, control region, per-user gain curve, and direction validation.
-- [ ] Task 4.5: Add scenario-labeled product acceptance logs for slow precise movement, stop-and-hold jitter, straight-line movement, click stability, drag stability, and long-session control.
-- [ ] Task 4.6: Implement product acceptance gates: cursor update p95 gap < 50 ms during active movement, movement coverage >= 80%, effective tracking FPS >= 30, stationary jitter <= 6 px RMS, and no cursor freeze > 150 ms.
-- [ ] Task 4.7: Add runtime diagnostics overlay for cursor update Hz, move gap p95, movement coverage, frame drop/stale counts, and calibration status.
-- [ ] Task 4.8: Tune Windows dispatch path for high-rate movement and verify against normal/elevated target windows.
+- [x] Task 4.3: Replace velocity-only mapping with a dedicated pointer engine that combines position, velocity, residual movement, adaptive deadzone, and virtual-trackpad bounds.
+- [x] Task 4.4: Add calibration workflow for neutral zone, control region, per-user gain curve, and direction validation.
+- [x] Task 4.5: Add scenario-labeled product acceptance logs for slow precise movement, stop-and-hold jitter, straight-line movement, click stability, drag stability, and long-session control.
+- [x] Task 4.6: Implement product acceptance gates: cursor update p95 gap < 50 ms during active movement, movement coverage >= 80%, effective tracking FPS >= 30, stationary jitter <= 6 px RMS, and no cursor freeze > 150 ms.
+- [x] Task 4.7: Add runtime diagnostics overlay for cursor update Hz, move gap p95, movement coverage, frame drop/stale counts, and calibration status.
+- [ ] Task 4.8: Tune Windows dispatch path for high-rate movement and verify against normal/elevated target windows. Automated API reuse, a 120-event movement burst, and a real normal-integrity target movement smoke test are covered; elevated-target verification remains.
 
 ## Dependencies
 - Requirements and design docs must be reviewed before implementation starts.
@@ -73,7 +73,14 @@ description: Initial task breakdown for the touchless mouse-control MVP
 ## Current Product Acceptance Status
 - Latest checked log: `C:\tmp\touchless-session.jsonl`.
 - Stale-frame regression is fixed in the latest implementation slice, but the current logged product metrics remain unacceptable: `effective_fps=15.48`, `cursor_update_hz=5.05`, `movement_coverage=0.33`, `move_gap_p95_ms=516.0`.
-- Next implementation focus is Task 4.3 and Task 4.4. Task 4.1 and Task 4.2 are first slices only; they do not complete product-grade pointer control.
+- Task 4.3 is implemented with a dedicated position-velocity pointer engine, residual accumulation, adaptive deadzone recovery, virtual-trackpad bounds, and a legacy cursor fallback. Automated tests cover the engine and runtime consumers; manual pointer-quality acceptance remains open.
+- Task 4.4 now provides a separate pointer-calibration profile/service for neutral center and jitter, validated control bounds, per-user gain scaling, and X/Y direction validation without changing the existing pinch/drag calibration API.
+- Task 4.5 adds validated `--scenario` labels to live JSONL records and scenario distributions to session reports for slow precise movement, stationary jitter, straight-line movement, click stability, drag stability, and long sessions.
+- Task 4.6 now computes active-movement coverage/gaps/freezes from labeled movement scenarios, stationary jitter from actual logged cursor deltas, and evaluates all five product thresholds. Passing the code gate does not replace the outstanding manual E2E runs.
+- Task 4.7 streams cursor update Hz, move-gap p95, movement coverage, camera read drops, stale hand-frame counts, and calibration status into the live preview overlay.
+- Task 4.8 now caches the Windows `SendInput` API boundary per sender, passes an automated 120-event movement burst, and moved the real cursor from `(400,300)` to `(422,300)` against a dedicated normal-integrity target. A normal-integrity injector was correctly blocked when the elevated target was foreground, but the elevated injector also failed `SendInput` with `last_error=87`; elevated dispatch remains a confirmed blocker.
+- Manual camera acceptance now detects the hand reliably in a short run (`220/222` hand frames, 36 commands, p95 latency 10 ms), but product cadence gates failed: `effective_fps=29.81`, `cursor_update_hz=4.34`, `movement_coverage=0.15`, `move_gap_p95_ms=1621`, and `max_cursor_freeze_ms=2352`. A longer run retained the hand for only 74 frames and also failed coverage/gap/freeze gates.
+- Milestone 4 still requires Task 4.8 manual validation and the full manual E2E matrix.
 
 ## Resources Needed
 - Windows machine for `SendInput` validation.

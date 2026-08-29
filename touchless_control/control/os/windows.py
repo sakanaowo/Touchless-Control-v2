@@ -51,10 +51,18 @@ class WindowsMouseController:
         return dispatch_result(command, self.backend_name, True, None)
 
 
-def create_sendinput_sender(send_input: Any | None = None) -> PayloadSender:
-    api = send_input or _send_input
+def create_sendinput_sender(
+    send_input: Any | None = None,
+    *,
+    send_input_factory: Any | None = None,
+) -> PayloadSender:
+    api = send_input
+    api_factory = send_input_factory or _create_send_input_api
 
     def sender(payload: dict[str, Any]) -> None:
+        nonlocal api
+        if api is None:
+            api = api_factory()
         mouse_input = _payload_to_input(payload)
         inputs = (_Input * 1)(mouse_input)
         sent_count = api(1, inputs, ctypes.sizeof(_Input))
@@ -98,9 +106,9 @@ def _payload_to_input(payload: dict[str, Any]) -> _Input:
     return _Input(type=INPUT_MOUSE, union=_InputUnion(mi=mouse_input))
 
 
-def _send_input(count: int, inputs: Any, input_size: int) -> int:
+def _create_send_input_api() -> Any:
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     send_input = user32.SendInput
     send_input.argtypes = (ctypes.c_uint, ctypes.POINTER(_Input), ctypes.c_int)
     send_input.restype = ctypes.c_uint
-    return int(send_input(count, inputs, input_size))
+    return send_input
