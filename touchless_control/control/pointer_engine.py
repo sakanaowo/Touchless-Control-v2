@@ -21,6 +21,9 @@ class PointerEngine:
     _residual_px: Point2D = (0.0, 0.0)
     _previous_position: Point2D | None = None
     _stillness_frames: int = 0
+    _motion_active: bool = False
+    _motion_anchor: Point2D | None = None
+    _quiet_frames: int = 0
 
     def map_motion(self, feature_frame: FeatureFrame) -> ActionCommand:
         velocity = feature_frame.hand_velocity_norm
@@ -33,35 +36,71 @@ class PointerEngine:
         # Compute position delta
         position_delta = _delta(clamped_position, self._previous_position)
         self._previous_position = clamped_position
+        if self._motion_anchor is None:
+            self._motion_anchor = clamped_position
 
         # Adaptive deadzone: grows during stillness, shrinks when moving
         active_deadzone = self._adaptive_deadzone(speed)
+        micro_deadzone = self._micro_deadzone()
+        bridging_quiet_motion = False
 
-        if speed < active_deadzone:
-            self._stillness_frames += 1
-            self._filtered_velocity = (0.0, 0.0)
-            self._residual_px = (0.0, 0.0)
-            return ActionCommand.none(
-                timestamp_ms=feature_frame.timestamp_ms,
-                source_state=self.source_state,
+        if not self._motion_active:
+            accumulated_delta = _delta(clamped_position, self._motion_anchor)
+            accumulated_distance = math.hypot(*accumulated_delta)
+            if speed < active_deadzone and accumulated_distance < active_deadzone:
+                self._stillness_frames += 1
+                if speed < micro_deadzone:
+                    self._motion_anchor = clamped_position
+                self._filtered_velocity = (0.0, 0.0)
+                self._residual_px = (0.0, 0.0)
+                return ActionCommand.none(
+                    timestamp_ms=feature_frame.timestamp_ms,
+                    source_state=self.source_state,
+                )
+
+            self._motion_active = True
+            self._quiet_frames = 0
+            self._stillness_frames = 0
+            position_delta = accumulated_delta
+        elif speed < micro_deadzone:
+            self._quiet_frames += 1
+            if self._quiet_frames >= max(1, self.config.motion_stop_frames):
+                self._motion_active = False
+                self._motion_anchor = clamped_position
+                self._stillness_frames = 1
+                self._filtered_velocity = (0.0, 0.0)
+                self._residual_px = (0.0, 0.0)
+                return ActionCommand.none(
+                    timestamp_ms=feature_frame.timestamp_ms,
+                    source_state=self.source_state,
+                )
+            decay = self.config.quiet_motion_decay
+            self._filtered_velocity = (
+                self._filtered_velocity[0] * decay,
+                self._filtered_velocity[1] * decay,
             )
-
-        self._stillness_frames = 0
+            bridging_quiet_motion = True
+        else:
+            self._quiet_frames = 0
+            self._stillness_frames = 0
 
         # Blend position and velocity based on speed
-        blended = _blend(
-            position_delta=position_delta,
-            velocity=velocity,
-            speed=speed,
-            blend_v_ref=self.config.blend_v_ref,
-        )
+        if not bridging_quiet_motion:
+            blended = _blend(
+                position_delta=position_delta,
+                velocity=velocity,
+                speed=speed,
+                blend_v_ref=self.config.blend_v_ref,
+            )
 
-        # Adaptive EMA smoothing
-        alpha = self._adaptive_alpha(speed)
-        self._filtered_velocity = (
-            self._filtered_velocity[0] + alpha * (blended[0] - self._filtered_velocity[0]),
-            self._filtered_velocity[1] + alpha * (blended[1] - self._filtered_velocity[1]),
-        )
+            # Adaptive EMA smoothing
+            alpha = self._adaptive_alpha(speed)
+            self._filtered_velocity = (
+                self._filtered_velocity[0]
+                + alpha * (blended[0] - self._filtered_velocity[0]),
+                self._filtered_velocity[1]
+                + alpha * (blended[1] - self._filtered_velocity[1]),
+            )
 
         # Gain curve
         gain = self._gain(speed)
@@ -99,12 +138,14 @@ class PointerEngine:
     def _adaptive_deadzone(self, speed: float) -> float:
         """Deadzone grows when the hand is still, shrinks when moving."""
         base = self.config.base_deadzone
-        micro = base * self.config.micro_deadzone_scale
         if speed >= base:
             return base
         stillness_factor = min(self._stillness_frames * self.config.stillness_decay, 3.0)
         active = base * (1.0 + stillness_factor)
-        return max(micro, min(active, self.config.max_deadzone))
+        return max(self._micro_deadzone(), min(active, self.config.max_deadzone))
+
+    def _micro_deadzone(self) -> float:
+        return self.config.base_deadzone * self.config.micro_deadzone_scale
 
     def _adaptive_alpha(self, speed: float) -> float:
         ratio = min(speed / self.config.v_ref, 1.0)

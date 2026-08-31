@@ -104,6 +104,9 @@ description: Acceptance and coverage plan for the touchless mouse-control MVP
 - [x] Accumulates residual/subpixel movement so small intentional motion can emit cursor updates instead of being fully dropped by deadzone.
 - [x] Dedicated pointer engine blends bounded position deltas with velocity and remains relative-only.
 - [x] Adaptive deadzone absorbs jitter during stillness and shrinks when intentional slow motion resumes.
+- [x] Cumulative directional sub-deadzone travel wakes pointer motion without lowering the stationary start threshold globally.
+- [x] Bidirectional sub-deadzone jitter remains suppressed, while two quiet frames do not discard an active movement intent.
+- [x] Active pointer motion emits decaying relative commands across the first two quiet frames and returns to the stationary gate on the third quiet frame.
 - [x] Virtual-trackpad bounds limit position contribution without disabling velocity-driven movement.
 - [x] Emits relative movement, never absolute cursor targets.
 
@@ -210,6 +213,9 @@ description: Acceptance and coverage plan for the touchless mouse-control MVP
 - Current model-backed dry-run rendered 900/900 preview frames without a cleanup crash but recorded `hand_frames=0` and `log_records=0`; camera index 0 was pointed at a dark surface and indexes 1-3 could not open.
 - After camera repositioning, a short `move-straight` run recorded 220/222 hand frames, 36 dispatches, zero failures, and p95 latency 10 ms. It still failed product gates with 15% movement coverage, 4.34 cursor Hz, 1621 ms p95 move gap, and 2352 ms max freeze.
 - A second 900-frame run recorded only 74 hand frames; effective FPS reached 30.78 but coverage was 30%, cursor Hz 9.15, p95 move gap 314 ms, and max freeze 344 ms, so `TP-MOVE-STRAIGHT` remains unchecked.
+- Offline replay through the motion-intent engine increased movement frames from 32 to 87 in the first log and 22 to 54 in the second. The second replay reached 73% coverage, 80 ms p95 move gap, and 93 ms max freeze; run fresh `move-straight` and `move-stationary` camera protocols before changing either E2E checkbox.
+- Fresh Task 4.9 hardware runs processed 150 stationary and 300 straight-line frames at 30 FPS with no tracking loss. Stationary jitter passed at 3.6 px RMS with no false click; straight-line cadence improved to 71% coverage and 69 ms p95 gap but included an 862 ms physical pause.
+- Task 4.10 production replay with `quiet_motion_decay=0.55` emits 246/300 straight-line movement frames (82% coverage) with a 50 ms p95 gap, while stationary replay remains below the jitter budget at 3.0 px RMS. The labeled straight run still reports an 859 ms leading/pause freeze, so the E2E movement check remains open pending a fresh continuous run.
 - Validate overlay state transitions.
 - Validate calibration flow with at least two users or repeated sessions.
 - Capture neutral, control-region, horizontal, and vertical sample sets before applying a pointer calibration profile; reject incomplete direction axes or insufficient travel.

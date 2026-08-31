@@ -20,6 +20,8 @@ class PointerConfig:
     max_deadzone: float = 0.035
     micro_deadzone_scale: float = 0.20
     stillness_decay: float = 0.05
+    motion_stop_frames: int = 3
+    quiet_motion_decay: float = 0.55
 
     # Position-velocity blending
     blend_v_ref: float = 0.04
@@ -62,6 +64,8 @@ class PointerConfig:
             max_deadzone=preset.deadzone * 2.5,
             micro_deadzone_scale=0.20,
             stillness_decay=0.05,
+            motion_stop_frames=3,
+            quiet_motion_decay=0.55,
             blend_v_ref=preset.v_ref * 0.4,
             trackpad_bounds=(0.15, 0.85, 0.15, 0.85),
             base_gain_px=preset.base_gain_px,

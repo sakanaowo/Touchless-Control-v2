@@ -7,7 +7,7 @@ description: Implementation notes, changed files, and code guidelines for the to
 # Touchless Control MVP Implementation Guide
 
 ## Development Setup
-- Current acceptance/reconciliation work runs in the existing dirty `main` workspace because the WIP implementation is already there; the dedicated feature worktree is four commits behind and must not be merged as the source of these changes.
+- Current continuation work runs on `main`. The previous product-pointer slice was reconciled in commit `d6eefbc`; the dedicated feature branch has no unique commits and is five commits behind `main`.
 - Python is run through `uv` in this environment because `python` and `py` are not directly available on PATH.
 - Camera/MediaPipe runtime uses Python 3.12 because MediaPipe is not usable with the previous Python 3.14 project setting.
 - Camera smoke command: `uv run python main.py camera-smoke --frames 30 --camera-index 0 --model C:\tmp\hand_landmarker.task`.
@@ -35,9 +35,9 @@ Current package layout:
 - `touchless_control/interaction/primitives.py`: primitive detector with pinch hysteresis and scroll disambiguation.
 - `touchless_control/interaction/state_machine.py`: hand interaction state machine and safety policy.
 - `touchless_control/control/cursor.py`: relative cursor mapper.
-- `touchless_control/control/pointer_config.py`: product pointer tuning for position-velocity blending, adaptive deadzone, bounds, gain, smoothing, and inversion.
+- `touchless_control/control/pointer_config.py`: product pointer tuning for position-velocity blending, adaptive deadzone, quiet-motion decay, bounds, gain, smoothing, and inversion.
 - `touchless_control/control/pointer_calibration.py`: pointer-specific neutral-zone, control-region, gain-scale, and direction-validation workflow.
-- `touchless_control/control/pointer_engine.py`: dedicated product pointer engine with position-velocity fusion, residual movement, adaptive deadzone, and virtual-trackpad bounds.
+- `touchless_control/control/pointer_engine.py`: dedicated product pointer engine with position-velocity fusion, residual movement, adaptive deadzone, decayed quiet-frame bridging, and virtual-trackpad bounds.
 - `touchless_control/control/queue.py`: bounded action queue and safe release tracking.
 - `touchless_control/control/os/factory.py`: OS auto-detection for mouse-controller selection.
 - `touchless_control/control/os/windows.py`: Windows mouse-controller payload adapter and `SendInput` sender.
@@ -192,7 +192,9 @@ Planned package boundaries remain:
 - Added `PointerCalibrationService` as a separate workflow so the existing pinch/drag `CalibrationService` remains backward-compatible.
 - Pointer calibration derives a median neutral center, RMS jitter deadzone, observed control-region bounds, per-user gain scale, and required X/Y inversion from labeled sample sequences.
 - `PointerConfig.from_calibration()` applies calibrated deadzone, bounds, direction, and gain while preserving the preset's smoothing and acceleration curve.
-- Current continuation work remains on `main` because Task 4.3 already existed there as uncommitted work; reconcile it with the dedicated feature worktree before commit.
+- Added motion-intent hysteresis: cumulative directional travel can cross the adaptive start threshold, active movement continues through sub-base speeds, and three truly quiet frames are required before the engine returns to its stationary gate.
+- Motion start remains anchored so alternating movement inside the adaptive start radius is treated as jitter instead of cursor intent.
+- Active motion now decays retained filtered velocity by 0.55 across the first two quiet frames. This bridges one- and two-frame perception gaps without lowering the stationary wake threshold; the third quiet frame still clears filtered velocity and residual state.
 
 ### Patterns & Best Practices
 - Contracts are frozen dataclasses with slots so state-machine inputs remain immutable per frame.
@@ -328,6 +330,12 @@ Planned package boundaries remain:
 - Task 4.7 preview red step failed because `PreviewStats` had no pointer diagnostic fields; the renderer test passed after adding the fields and overlay text.
 - Task 4.7 runtime red step failed because `LiveRunner` had no calibration status or runtime metric propagation; `uv run python -m unittest tests.test_live_runner tests.test_preview tests.test_main_cli` passed 23 tests after wiring live counters into preview stats.
 - Task 4.8 high-rate red step failed because `create_sendinput_sender()` had no reusable API factory; `uv run python -m unittest tests.test_mouse_controller` passed 11 tests after adding lazy one-time API resolution and a 120-event burst test.
+- Task 4.9 motion-start red step emitted zero commands for eight directional `0.004`-norm frames below the responsive base deadzone. The focused test passed after adding cumulative displacement wake-up, while an alternating jitter sequence remained fully suppressed.
+- Task 4.9 stop-hysteresis red step lost motion intent after two quiet frames. The focused test passed after requiring three quiet frames before returning to stationary mode. Disabling cumulative wake made the primary regression test fail again; restoring it returned all three focused tests to green.
+- Offline replay through the updated pointer engine increased the first manual log from 32 to 87 movement frames (`coverage=39.5%`, `gap_p95=117 ms`) and the second from 22 to 54 (`coverage=73%`, `gap_p95=80 ms`, `max_freeze=93 ms`). These results demonstrate improvement on recorded motion but do not satisfy fresh hardware acceptance.
+- Task 4.10 quiet-bridge red step returned `none` for both quiet frames instead of two decaying `move_relative` commands. The focused test passed after retaining and decaying filtered velocity until the existing third-frame stop.
+- A one-variable replay sweep selected `quiet_motion_decay=0.55` as the smallest value that reached 82% coverage and a 50 ms p95 gap; the corresponding stationary replay remained at 3.0 px RMS. A config-focused red test observed 0.50 instead of 0.55 before the tuned default was applied.
+- Task 4.10 mutation verification temporarily removed the quiet bridge, causing the focused regression to fail with `('none', 'none')`; restoring the bridge returned the test to green.
 - Preview cleanup regression red step called `destroyWindow()` before the first render; the focused test and 24 preview/live/CLI regressions passed after guarding cleanup with `_window_ready`. Removing the guard made the focused regression fail again, and restoring it returned the test to green.
 - Manual model verification downloaded the official MediaPipe Hand Landmarker float16 task to temporary storage with SHA-256 `fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1`; `camera-smoke` read 30 frames and initialized MediaPipe successfully.
 - Manual preview dry-run rendered 900 frames without camera read failures or cleanup errors, but the only available camera showed a dark surface and produced zero hand/log records, so movement E2E acceptance remains open.
@@ -336,5 +344,5 @@ Planned package boundaries remain:
 - Windows integrity testing confirmed normal-to-elevated blocking with the elevated target foreground. The elevated injector found and foregrounded the same target and set the cursor baseline, but `SendInput` returned zero with `last_error=87`; Task 4.8 remains open for root-cause analysis.
 
 ## Product Readiness Notes
-- The MVP foundation is not yet an acceptable end-user product. Current manual log analysis showed low pipeline latency but unacceptable cursor cadence: `cursor_update_hz=5.05`, `movement_coverage=0.33`, and `move_gap_p95_ms=516.0`.
-- The dedicated product pointer engine now covers position+velocity fusion, residual accumulation, adaptive jitter-aware deadzone, and virtual-trackpad bounds. Product readiness still requires control-region calibration, scenario-labeled logs, hardware acceptance gates, runtime diagnostics, and Windows dispatch validation.
+- Fresh paired hardware evidence now passes stationary jitter at 3.6 px RMS and reaches 30 FPS with no tracking loss. Pre-bridge straight-line cadence reached 71% coverage and a 69 ms p95 gap.
+- Production replay through the decayed quiet-frame bridge reaches 82% coverage, a 50 ms p95 gap, and 3.0 px stationary jitter RMS. Product readiness still requires a fresh continuous-movement camera run to eliminate the recorded physical warm-up/pause freeze, repeated stationary/manual protocols, end-to-end calibration wiring, and Windows elevated dispatch validation.

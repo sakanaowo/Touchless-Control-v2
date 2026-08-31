@@ -15,6 +15,7 @@ class PointerConfigTests(unittest.TestCase):
         self.assertEqual(config.base_deadzone, preset.deadzone)
         self.assertEqual(config.base_gain_px, preset.base_gain_px)
         self.assertEqual(config.max_step_px, preset.max_step_px)
+        self.assertEqual(config.quiet_motion_decay, 0.55)
         self.assertFalse(config.invert_x)
 
     def test_from_preset_forwards_axis_inversion_and_gain_scale(self) -> None:
@@ -225,6 +226,172 @@ class PointerEngineTests(unittest.TestCase):
         ]
 
         self.assertIn("move_relative", {command.type for command in commands})
+
+    def test_sustained_sub_deadzone_directional_motion_wakes_pointer(self) -> None:
+        from touchless_control.control.pointer_config import PointerConfig
+        from touchless_control.control.pointer_engine import PointerEngine
+        from touchless_control.core.config import SensitivityPreset
+
+        engine = PointerEngine(
+            config=PointerConfig.from_preset(SensitivityPreset.responsive())
+        )
+        engine.map_motion(
+            _feature(
+                timestamp_ms=1,
+                hand_velocity_norm=(0.0, 0.0),
+                palm_center_norm=(0.5, 0.5),
+            )
+        )
+
+        commands = [
+            engine.map_motion(
+                _feature(
+                    timestamp_ms=10 + index,
+                    hand_velocity_norm=(0.004, 0.0),
+                    palm_center_norm=(0.504 + 0.004 * index, 0.5),
+                )
+            )
+            for index in range(8)
+        ]
+
+        move_commands = [
+            command for command in commands if command.type == "move_relative"
+        ]
+        self.assertGreaterEqual(len(move_commands), 5)
+
+    def test_bidirectional_sub_deadzone_jitter_does_not_wake_pointer(self) -> None:
+        from touchless_control.control.pointer_config import PointerConfig
+        from touchless_control.control.pointer_engine import PointerEngine
+        from touchless_control.core.config import SensitivityPreset
+
+        engine = PointerEngine(
+            config=PointerConfig.from_preset(SensitivityPreset.responsive())
+        )
+        engine.map_motion(
+            _feature(
+                timestamp_ms=1,
+                hand_velocity_norm=(0.0, 0.0),
+                palm_center_norm=(0.5, 0.5),
+            )
+        )
+
+        commands = [
+            engine.map_motion(
+                _feature(
+                    timestamp_ms=10 + index,
+                    hand_velocity_norm=(0.008 if index % 2 == 0 else -0.008, 0.0),
+                    palm_center_norm=(0.508 if index % 2 == 0 else 0.492, 0.5),
+                )
+            )
+            for index in range(20)
+        ]
+
+        self.assertEqual({command.type for command in commands}, {"none"})
+
+    def test_motion_intent_survives_two_quiet_frames(self) -> None:
+        from touchless_control.control.pointer_config import PointerConfig
+        from touchless_control.control.pointer_engine import PointerEngine
+        from touchless_control.core.config import SensitivityPreset
+
+        engine = PointerEngine(
+            config=PointerConfig.from_preset(SensitivityPreset.responsive())
+        )
+        engine.map_motion(
+            _feature(
+                timestamp_ms=1,
+                hand_velocity_norm=(0.0, 0.0),
+                palm_center_norm=(0.5, 0.5),
+            )
+        )
+        for index in range(4):
+            engine.map_motion(
+                _feature(
+                    timestamp_ms=10 + index,
+                    hand_velocity_norm=(0.004, 0.0),
+                    palm_center_norm=(0.504 + 0.004 * index, 0.5),
+                )
+            )
+
+        engine.map_motion(
+            _feature(
+                timestamp_ms=20,
+                hand_velocity_norm=(0.0, 0.0),
+                palm_center_norm=(0.516, 0.5),
+            )
+        )
+        engine.map_motion(
+            _feature(
+                timestamp_ms=21,
+                hand_velocity_norm=(0.0, 0.0),
+                palm_center_norm=(0.516, 0.5),
+            )
+        )
+
+        resumed = engine.map_motion(
+            _feature(
+                timestamp_ms=22,
+                hand_velocity_norm=(0.004, 0.0),
+                palm_center_norm=(0.520, 0.5),
+            )
+        )
+
+        self.assertEqual(resumed.type, "move_relative")
+
+    def test_active_motion_emits_decaying_commands_for_two_quiet_frames(self) -> None:
+        from touchless_control.control.pointer_config import PointerConfig
+        from touchless_control.control.pointer_engine import PointerEngine
+        from touchless_control.core.config import SensitivityPreset
+
+        engine = PointerEngine(
+            config=PointerConfig.from_preset(SensitivityPreset.responsive())
+        )
+        engine.map_motion(
+            _feature(
+                timestamp_ms=1,
+                hand_velocity_norm=(0.0, 0.0),
+                palm_center_norm=(0.5, 0.5),
+            )
+        )
+        for index in range(4):
+            engine.map_motion(
+                _feature(
+                    timestamp_ms=10 + index,
+                    hand_velocity_norm=(0.02, 0.0),
+                    palm_center_norm=(0.52 + 0.02 * index, 0.5),
+                )
+            )
+
+        first_quiet = engine.map_motion(
+            _feature(
+                timestamp_ms=20,
+                hand_velocity_norm=(0.0, 0.0),
+                palm_center_norm=(0.58, 0.5),
+            )
+        )
+        second_quiet = engine.map_motion(
+            _feature(
+                timestamp_ms=21,
+                hand_velocity_norm=(0.0, 0.0),
+                palm_center_norm=(0.58, 0.5),
+            )
+        )
+        third_quiet = engine.map_motion(
+            _feature(
+                timestamp_ms=22,
+                hand_velocity_norm=(0.0, 0.0),
+                palm_center_norm=(0.58, 0.5),
+            )
+        )
+
+        self.assertEqual(
+            (first_quiet.type, second_quiet.type),
+            ("move_relative", "move_relative"),
+        )
+        self.assertGreater(
+            abs(first_quiet.dx_px or 0),
+            abs(second_quiet.dx_px or 0),
+        )
+        self.assertEqual(third_quiet.type, "none")
 
     def test_source_state_propagates_to_action_command(self) -> None:
         from touchless_control.control.pointer_engine import PointerEngine
