@@ -50,6 +50,7 @@ description: Initial task breakdown for the touchless mouse-control MVP
 - [ ] Task 4.8: Tune Windows dispatch path for high-rate movement and verify against normal/elevated target windows. Automated API reuse, a 120-event movement burst, and a real normal-integrity target movement smoke test are covered; elevated-target verification remains.
 - [x] Task 4.9: Add motion-intent hysteresis so cumulative directional travel can wake sub-deadzone movement, brief quiet gaps do not immediately stop an active motion, and bounded bidirectional jitter remains suppressed.
 - [x] Task 4.10: Bridge the first two quiet frames of active pointer motion with a decayed filtered velocity, while preserving the third-frame stationary stop and the existing wake deadzone.
+- [x] Task 4.11: Replace placeholder README, deployment, and monitoring documents with concrete local setup, safe rollout, rollback, metrics, log-retention, and incident-response guidance.
 
 ## Dependencies
 - Requirements and design docs must be reviewed before implementation starts.
@@ -87,7 +88,7 @@ description: Initial task breakdown for the touchless mouse-control MVP
 - Manual camera acceptance now detects the hand reliably in a short run (`220/222` hand frames, 36 commands, p95 latency 10 ms), but product cadence gates failed: `effective_fps=29.81`, `cursor_update_hz=4.34`, `movement_coverage=0.15`, `move_gap_p95_ms=1621`, and `max_cursor_freeze_ms=2352`. A longer run retained the hand for only 74 frames and also failed coverage/gap/freeze gates.
 - Milestone 4 still requires Task 4.8 manual validation and the full manual E2E matrix.
 
-Planning reconciliation: Tasks 4.9 and 4.10 are complete in code and automated tests. The next ordered actions are (1) rerun continuous `move-straight` on camera with the quiet-frame bridge, (2) run `move-slow-precise`, (3) repeat `move-stationary` until the manual protocol has enough samples for sign-off, and (4) investigate metric segmentation only if a correctly executed movement run still reports a warm-up/pause freeze. Task 4.8 elevated Windows dispatch remains independently blocked.
+Planning reconciliation: Tasks 4.9–4.11 are complete in code/docs and automated checks. Operational setup, release, rollback, metric, retention, and incident guidance now reflect the local desktop architecture instead of generic service templates. The next ordered actions are (1) rerun continuous `move-straight` on camera with the quiet-frame bridge, (2) run `move-slow-precise`, (3) repeat `move-stationary` until the manual protocol has enough samples for sign-off, and (4) investigate metric segmentation only if a correctly executed movement run still reports a warm-up/pause freeze. Task 4.8 elevated Windows dispatch remains independently blocked.
 
 ## Resources Needed
 - Windows machine for `SendInput` validation.

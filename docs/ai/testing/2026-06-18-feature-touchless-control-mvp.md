@@ -205,6 +205,7 @@ description: Acceptance and coverage plan for the touchless mouse-control MVP
 - Current automated command: `uv run python -m unittest discover`.
 
 ## Manual Testing
+- The root README and feature deployment/monitoring documents now provide the canonical safe startup, dry-run, report, release-gate, log-retention, and incident-response commands for manual operators.
 - Validate camera selection and startup with `live --preview` and a hand visible in frame until `hand_frames > 0` and `preview_frames > 0`.
 - If `hand_frames=0`, capture `camera-snapshot` and inspect the saved frame for wrong camera source, dark image, blur, or framing problems.
 - Validate `live --preview --log C:\tmp\touchless-session.jsonl` with a hand visible until the preview shows landmarks, pinch line, counters, and `Pointing`, then move/pinch/scroll until action badge/`commands > 0`, `log_records > 0`, and the overlay state changes are visible.
